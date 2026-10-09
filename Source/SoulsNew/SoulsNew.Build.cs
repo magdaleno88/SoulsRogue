@@ -12,6 +12,7 @@ public class SoulsNew : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"GameplayTags",
 			"InputCore",
 			"EnhancedInput",
 			"AIModule",

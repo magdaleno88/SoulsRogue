@@ -111,25 +111,7 @@ bool USoulsHealthComponent::SetBaseMaxHealth(float NewBaseMaxHealth)
 
 bool USoulsHealthComponent::AddMaxHealthModifier(const FSoulsAttributeModifier& Modifier)
 {
-	check(IsInGameThread());
-	if (bBroadcastingChanges || !IsValidModifier(Modifier)
-		|| MaxHealthModifiers.ContainsByPredicate([&Modifier](const FSoulsAttributeModifier& Existing) { return Existing.Id == Modifier.Id; }))
-	{
-		return false;
-	}
-
-	TArray<FSoulsAttributeModifier> ProposedModifiers = MaxHealthModifiers;
-	ProposedModifiers.Add(Modifier);
-	ProposedModifiers.Sort(ModifierIdLess);
-	float NewMaxHealth;
-	if (!TryCalculateMaxHealth(BaseMaxHealth, ProposedModifiers, NewMaxHealth))
-	{
-		return false;
-	}
-
-	MaxHealthModifiers = MoveTemp(ProposedModifiers);
-	ApplyMaxHealthPreservingPercentage(NewMaxHealth);
-	return true;
+	return ApplyMaxHealthModifierChanges(MakeArrayView(&Modifier, 1), {});
 }
 
 bool USoulsHealthComponent::FindMaxHealthModifier(const FGuid& Id, FSoulsAttributeModifier& OutModifier) const
@@ -147,15 +129,35 @@ bool USoulsHealthComponent::FindMaxHealthModifier(const FGuid& Id, FSoulsAttribu
 
 bool USoulsHealthComponent::RemoveMaxHealthModifier(const FGuid& Id)
 {
+	return ApplyMaxHealthModifierChanges({}, MakeArrayView(&Id, 1));
+}
+
+bool USoulsHealthComponent::ApplyMaxHealthModifierChanges(TConstArrayView<FSoulsAttributeModifier> AddedModifiers,
+	TConstArrayView<FGuid> RemovedModifierIds)
+{
 	check(IsInGameThread());
-	const int32 Index = MaxHealthModifiers.IndexOfByPredicate([&Id](const FSoulsAttributeModifier& Modifier) { return Modifier.Id == Id; });
-	if (bBroadcastingChanges || Index == INDEX_NONE)
+	if (bBroadcastingChanges)
 	{
 		return false;
 	}
 
 	TArray<FSoulsAttributeModifier> ProposedModifiers = MaxHealthModifiers;
-	ProposedModifiers.RemoveAt(Index);
+	for (const FGuid& Id : RemovedModifierIds)
+	{
+		const int32 Index = ProposedModifiers.IndexOfByPredicate([&Id](const FSoulsAttributeModifier& Modifier) { return Modifier.Id == Id; });
+		if (Index == INDEX_NONE) { return false; }
+		ProposedModifiers.RemoveAt(Index);
+	}
+	for (const FSoulsAttributeModifier& Modifier : AddedModifiers)
+	{
+		if (!IsValidModifier(Modifier)
+			|| ProposedModifiers.ContainsByPredicate([&Modifier](const FSoulsAttributeModifier& Existing) { return Existing.Id == Modifier.Id; }))
+		{
+			return false;
+		}
+		ProposedModifiers.Add(Modifier);
+	}
+	ProposedModifiers.Sort(ModifierIdLess);
 	float NewMaxHealth;
 	if (!TryCalculateMaxHealth(BaseMaxHealth, ProposedModifiers, NewMaxHealth))
 	{

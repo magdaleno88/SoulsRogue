@@ -73,6 +73,10 @@ public:
 	bool FindMaxHealthModifier(const FGuid& Id, FSoulsAttributeModifier& OutModifier) const;
 	bool RemoveMaxHealthModifier(const FGuid& Id);
 
+	/** Validate a candidate registry, then commit once. Failure changes nothing and emits no events. */
+	bool ApplyMaxHealthModifierChanges(TConstArrayView<FSoulsAttributeModifier> AddedModifiers,
+		TConstArrayView<FGuid> RemovedModifierIds);
+
 	/** Explicit new life: retains modifiers, fills health and rearms Death. C++ only. */
 	bool ResetHealthForNewLife();
 

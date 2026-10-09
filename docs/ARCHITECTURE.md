@@ -2,7 +2,7 @@
 
 Fecha: 8 de octubre de 2026 (America/Mexico_City).
 
-**Estado: arquitectura propuesta con la primera implementación de Health y modificadores.** Las secciones de inspección describen el baseline original; la sección 15 concreta el incremento autorizado posteriormente. Las demás clases siguen siendo propuestas. No se ha migrado gameplay existente ni modificado assets; este documento no autoriza ejecutar todo el roadmap.
+**Estado: arquitectura propuesta con Health/modificadores y objetos universales mínimos implementados.** Las secciones de inspección describen el baseline original; las secciones 15 y 16 concretan los incrementos autorizados posteriormente. Las demás clases siguen siendo propuestas. No se ha migrado gameplay existente ni modificado assets; este documento no autoriza ejecutar todo el roadmap.
 
 ## 1. Alcance y evidencia
 
@@ -128,7 +128,7 @@ Propongo `USoulsItemDefinition : UPrimaryDataAsset` para la definición única. 
 
 ## 5. Responsabilidades y fronteras
 
-Los nombres de esta tabla siguen siendo **propuestos**, excepto `USoulsHealthComponent` y `FSoulsAttributeModifier`, implementados en la fase de Health descrita en la sección 15. Las tres clases base de SoulsNew ya existían.
+Los nombres de esta tabla siguen siendo **propuestos**, excepto `USoulsHealthComponent` y `FSoulsAttributeModifier` (sección 15), y `USoulsItemComponent`, `USoulsItemDefinition` y `FSoulsOwnedItem` (sección 16). Las tres clases base de SoulsNew ya existían.
 
 | Elemento | Responsabilidad | Cuándo |
 | --- | --- | --- |
@@ -201,7 +201,7 @@ Requisito: Capability.Health
 Regla: WhileOwned
 Efecto: atributo MaxHealth, operación AdditivePercent, magnitud 0.25
 Duración: WhileOwned
-Stack: UniquePerOwner (una contribución por definición)
+Stack: pendiente; la segunda fase técnica permite grants independientes
 ExclusiveGroups: ninguno
 ```
 
@@ -222,7 +222,7 @@ MaxHealth = max(MinimumMaxHealth,
 
 Para el futuro ejemplo de Vitalidad no hay flat modifiers: `500 * 1.25 = 625`; `100 * 1.25 = 125`. La capa porcentual amplifica ahora base y bonos planos, en lugar de la propuesta original de porcentaje sobre base únicamente: se adopta el orden solicitado en la tarea de implementación. Dos contribuciones de +25% suman +50% en esta capa. Multiplicative usa factores, por ejemplo 1.25, cuyo producto se aplica al final; su identidad es 1. El mínimo efectivo es 1 HP. No hay overrides ni prioridades implícitas.
 
-Otorgar Vitalidad otra vez al mismo owner no crea un segundo +25%. Quitarla elimina su handle y recalcula desde base y contribuciones restantes, sin dividir un valor acumulado por 1.25. Cambiar BaseMaxHealth también recalcula usando la misma regla.
+La política final de duplicados sigue pendiente. En la segunda fase técnica, otorgar la misma definición dos veces crea dos grants con contribuciones independientes (+50% aditivo en este ejemplo). Quitar un grant elimina solo sus handles y recalcula desde base y contribuciones restantes, sin dividir un valor acumulado por 1.25. Cambiar BaseMaxHealth también recalcula usando la misma regla. Esta decisión técnica del incremento autorizado sustituye la propuesta inicial UniquePerOwner; no fija stacking, niveles ni evolución del diseño final.
 
 **Política implementada: PreservePercentage.** Al modificar MaxHealth mientras está vivo, preservar la proporción (`newCurrent = oldCurrent / oldMax * newMax`, limitada al nuevo rango). El componente nace lleno y su inicialización reconcilia la base configurada conservando esa proporción. Así las pruebas de base 500 y 100 terminan en `625/625` y `125/125`; `50/100` pasa a `62.5/125`. También se aplica al quitar modificadores y cambiar la base. Un muerto permanece en 0 y nunca revive por recalcular atributos o por Heal; solo el reinicio C++ explícito de ciclo lo permite. Una política distinta requerirá cambiar esta función y sus tests, sin modificar directamente CurrentHealth desde Blueprint.
 
@@ -383,7 +383,7 @@ Crear solo áreas con implementación real. El contenido del template conserva s
 | 0 — esta tarea | Análisis, AGENTS.md y esta propuesta | Solo documentación; archivos existentes preservados |
 | 1 — baseline y contrato | Confirmar build Editor 5.8.3, abrir ThirdPerson/Combat en PIE sin guardar cambios accidentales, resolver origen de errores de log; fijar política de vida actual y decisión de backend | Baseline reproducible; alcance del slice y dependencias explicados |
 | 2 — Health mínimo | Componente con base/máximo/actual, daño controlado, modificadores con handles y muerte única; owner Player 100 y Boss 500 | Pruebas de daño/clamp/recalculo/retirada y UI opcional; sin stamina/poise |
-| 3 — objeto universal mínimo | Definición Vitalidad + ItemComponent + requisito Health + UniquePerOwner | La misma referencia de definición produce 625 en boss y 125 en player; otorgar dos veces no acumula |
+| 3 — objeto universal mínimo | Definición + ItemComponent + requisito real Health; grants técnicos independientes (incremento implementado en sección 16) | La misma referencia produce 625 y 125; retirada individual, aislamiento y transacciones probados; política final de duplicados pendiente |
 | 4 — cerrar primer vertical slice | Boss inerte con Vitalidad, muerte por daño de prueba autorizado, recompensa única y pickup | Flujo completo 500 -> 625 -> muerte -> pickup -> 100 -> 125; recolección y muerte repetidas no duplican efectos/drop |
 | 5 — tres objetos compatibles | Catálogo pequeño adicional, tags/grupos/bloqueos, semilla y selección de tres | Los tres efectos existen en runtime; drop pertenece al trío; pool insuficiente y combinaciones bloqueadas devuelven fallo |
 | 6 — combate básico | Daño/hit/eventos confirmados, Light Attack y enemigo mínimo; después Heavy/Charged, stamina y Dodge | Sin dobles hits/procs; mismas APIs desde player y AI; interrupciones/costes consistentes |
@@ -400,7 +400,7 @@ Pruebas futuras mínimas del slice:
 - Player sin objeto `100/100`; tras recoger la misma definición `125/125` bajo la política propuesta.
 - Un actor compatible adicional obtiene el mismo porcentaje; uno sin Health rechaza sin efectos parciales.
 - Retirada vuelve al máximo base; reequipar no produce deriva; cambiar base recalcula.
-- Doble grant y doble overlap no duplican; adquisición rechazada no consume el pickup.
+- Retirar dos veces el mismo grant no duplica operaciones; la política de duplicados de adquisición queda pendiente. Doble overlap no duplica una recogida; adquisición rechazada no consume el pickup.
 - Muerte una sola vez; Destroy por limpieza no da loot; el pickup conserva datos aunque se destruya el cadáver.
 - Fallo al crear pickup no pierde la recompensa ni cambia el sorteo.
 - Repetir en PIE y en build empaquetada al configurar catálogo/cook.
@@ -502,3 +502,52 @@ Los tres eventos tienen versiones nativas C++ y Blueprint: HealthChanged y MaxHe
 La suite `SoulsNew.Health` contiene 15 Unreal Automation Tests compilados bajo WITH_DEV_AUTOMATION_TESTS: los casos A–H solicitados y pruebas de IDs, orden determinista/cancelación numérica, validación atómica, ciclos de vida, orden de eventos/reentrada, recálculo/suelo y configuración en Actor genérico. El backend elegido para este incremento es el núcleo propio mínimo; GAS permanece como evaluación futura antes de expandir combate.
 
 Validación de este incremento: SoulsNewEditor Win64 Development compilado con UE 5.8.3 mediante UBT (UHT y compilación nativa, no Live Coding); sin warnings de compilación. Se utilizaron `-NoPCH -NoUBA -MaxParallelActions=1` para evitar la presión de memoria observada con el PCH compartido, sin cambiar Build.cs ni ajustes del motor. UnrealEditor-Cmd ejecutó `Automation RunTests SoulsNew.Health` con `/Engine/Maps/Entry`, `-nullrhi -nosound -unattended`: **15 Success, 0 fallos, 0 warnings en los tests**, salida 0. Evidencia local generada: `Saved/Logs/HealthPhase-EditorBuild-Final.log`, `Saved/Logs/HealthPhase-Automation.log` y `Saved/Automation/HealthPhase/index.json`. El arranque emitió 14 mensajes genéricos `LogAutomationTest: Error: Condition failed`, también presentes en el log previo del proyecto, y un warning de layout del editor; su causa queda sin diagnosticar y no se atribuye a la suite nueva. Esta ejecución no valida PIE, presentación Blueprint ni una build empaquetada.
+
+## 16. Segunda implementación: objetos universales mínimos
+
+El incremento crea `Items/SoulsItemDefinition.{h,cpp}`, `Items/SoulsItemComponent.{h,cpp}` y `Tests/SoulsItemComponentTests.cpp`. La misma definición transitoria de Vitalidad se concede a Actors genéricos de 100 y 500 HP mediante datos `MaxHealth / AdditivePercent / 0.25`. No hay ramas por ItemId, Player o Boss, ni integración en actores/Blueprints/mapas existentes. No se crean assets, drops, pickups, RNG de objetos, UI, persistencia, GAS ni otros sistemas de combate.
+
+### Definición y schema de efectos
+
+`USoulsItemDefinition : UPrimaryDataAsset` contiene únicamente datos privados editables en defaults: ItemId lógico FName, DisplayName, Description, Effects, ItemTags (también categorías) y ExclusiveGroups. La API runtime solo ofrece lectura const; `CreateTransient` copia los datos una vez para construcción C++/tests, con RF_Transient. No almacena dueño, grants, modificadores, vida ni timers. La inmutabilidad es el contrato de la API runtime; no pretende impedir modificaciones por herramientas de edición o reflexión externa.
+
+`FSoulsItemEffect` es un struct reflejado de Attribute, Operation y Magnitude. Solo MaxHealth es un destino implementado; destinos desconocidos se rechazan. Reutiliza `ESoulsAttributeModifierOperation`, ahora UENUM de configuración sin BlueprintType ni nuevas APIs de mutación Blueprint. Los tres tipos existentes (Flat, AdditivePercent, Multiplicative) se interpretan por Health; Vitalidad es solo una configuración en las pruebas. Efectos pasivos duran mientras exista su grant.
+
+Se añade **GameplayTags** como dependencia pública directa porque los headers del schema usan FGameplayTagContainer. Es un módulo existente del motor, sin plugin nuevo ni GAS. Evita introducir categorías FName provisionales y migrarlas después. ItemTags/ExclusiveGroups son metadata reservada: no se evalúan requisitos, bloqueos ni exclusividad aún. No hay diccionario de tags del juego, scan/cook de catálogo ni registro de assets; se configurarán al autorizar contenido. Retirar esta dependencia requeriría cambiar los dos campos de tags, no los cálculos ni posesiones.
+
+### Identidades y posesión independiente
+
+| Identidad | Representación | Alcance |
+| --- | --- | --- |
+| Definition ID | ItemId FName, p. ej. Item.Vitality | Identidad lógica aportada por datos, independiente de puntero/nombre de archivo |
+| Primary Asset ID | SoulsItem:ItemId | Override de GetPrimaryAssetId basado en ID lógico; el catálogo futuro deberá validar unicidad |
+| Grant ID | FGuid generado por concesión | Identifica una posesión runtime concreta; estable durante ese grant |
+| Modifier ID | FGuid nuevo por efecto/grant | Identifica la contribución exacta en Health; distinto del Grant ID |
+
+`FSoulsOwnedItem` vive exclusivamente en el ItemComponent: referencia reflejada fuerte a la definición, copia del ItemId, GrantId, target Health débil e IDs de modificadores. La referencia fuerte protege la definición frente a GC; el target débil no prolonga un componente destruido. Owners distintos pueden retener exactamente el mismo UObject de definición, sin compartir grants, contribuciones ni vida. FindGrant devuelve un snapshot por copia de identidades, sin acceso mutable al registro.
+
+Cada llamada correcta crea un grant técnicamente independiente, incluso con el mismo ItemId/definición; +25% dos veces da +50% en la capa aditiva. RemoveItem usa el GrantId, nunca borra todas las posesiones del mismo ItemId. No se fija una política definitiva de duplicados, stacking, evolución ni niveles. HasItem consulta identidad lógica. Blueprint puede consultar posesión y recibir ItemGranted/ItemRemoved; Grant/Remove y snapshots internos siguen siendo C++.
+
+### Aplicación, retirada y rollback
+
+GrantItem devuelve un resultado tipado y un GUID válido solo si tiene éxito. Valida definición (ID/nombre/efectos), owner y destinos; exige **exactamente un Health válido del mismo Actor**, rechazando ausencia o ambigüedad. La composición concreta basta para esta fase: no se añade todavía ISoulsItemOwner ni búsqueda global/casts a Character/controlador. No se depende de orden BeginPlay para conceder; el llamador debe haber configurado la base y los componentes antes.
+
+El componente prepara una posesión y GUIDs por efecto, registra provisionalmente la posesión y llama a **ApplyMaxHealthModifierChanges**, API pública C++ nueva de Health. Esta API crea un registro candidato, valida IDs/operaciones/magnitudes y resultado final, ordena por GUID y confirma todo en una única transición PreservePercentage. Las APIs individuales Add/Remove reutilizan ese camino; Health sigue sin conocer objetos ni Vitalidad. No se cambia la fórmula ni se escribe BaseMaxHealth desde Items.
+
+Si algún efecto o agregado falla, Health descarta el candidato sin cambios de modificadores, HP, muerte ni eventos; Items retira el registro provisional y deja inválido el output. Ese descarte es el rollback: no se aplica una secuencia de buffs y compensaciones que exponga estados intermedios o altere HP por redondeo. Actualmente todos los efectos van al mismo Health; una futura transacción entre varios sistemas necesitará coordinación adicional antes de habilitar esos destinos.
+
+RemoveItem retiene una copia del grant, lo retira provisionalmente del registro y elimina **solo sus IDs** en el target original mediante el mismo lote. IDs que ya no existen no tienen efecto que retirar; no se sustituyen por contribuciones de otro dueño ni por otro Health. Si el target ya no existe, solo se retira la posesión. Si Health rechaza el agregado resultante o la reentrada, se restaura el grant y el lote deja Health intacto. Un caso extremo de overflow por modificadores externos compensados puede impedir una retirada: devuelve HealthRejected y requiere corregir esas contribuciones antes de reintentar, sin pérdida silenciosa de IDs.
+
+### Eventos y finalización
+
+Las mutaciones requieren game thread y rechazan reentrada mientras se procesa grant/remove o sus eventos. Durante callbacks de Health, la posesión provisional coincide con el estado de Health ya confirmado. Después de los eventos de Health se emite ItemGranted/ItemRemoved (componente, GrantId, ItemId), nativo y luego Blueprint, una vez por operación correcta. Operaciones fallidas, handles inexistentes y retirada repetida no emiten eventos de Items.
+
+EndPlay/OnComponentDestroyed libera los IDs de las posesiones del componente, sin convertir teardown en eventos ItemRemoved de gameplay. Agrupa retiradas por target; si la destrucción ocurre dentro de un callback de Health, programa un único intento diferido en game thread con referencia débil e IDs, sin retener al componente Items/definición ni usar Tick. Un grant destruido antes de su evento retira sus propias contribuciones al terminar el scope de notificación de Health, antes de devolver Unavailable; el intento diferido completa la limpieza de las demás posesiones si las había. Un rechazo de rollback/limpieza emite warning explícito; no hay reintentos infinitos ni supresión de fallos. Una transacción que depende de recibir un resultado normal no debe destruir los componentes implicados desde sus callbacks.
+
+### Pruebas
+
+La suite SoulsNew.Items contiene los 12 casos A–L solicitados y 8 pruebas adicionales de múltiples efectos en una transición, retirada fallida atómica, definición/owner inválidos o Health ambiguo, rechazo durante callback de Health, retención/liberación frente a GC, limpieza al destruir componente, destrucción desde callback y atomicidad de lotes Health. Los fixtures usan mundos/Actors/definiciones transitorios, sin guardar contenido.
+
+Validación final: SoulsNewEditor Win64 Development compilado con UE 5.8.3 mediante UBT/UHT, usando `-NoPCH -NoUBA -MaxParallelActions=1`; salida 0, sin warnings de compilación. `Automation RunTests SoulsNew.` ejecutado con UnrealEditor-Cmd, `/Engine/Maps/Entry`, `-nullrhi -nosound -unattended`: **20/20 Items y 15/15 Health Success, cero fallos/warnings en las suites**, salida 0. Evidencia local: `Saved/Logs/ItemsPhase-EditorBuild-Validated.log`, `Saved/Logs/ItemsPhase-Automation-Validated.log` y `Saved/Automation/ItemsPhase-Validated/index.json`. La comprobación de hashes confirma que los 753 assets/mapas originales, Config, AGENTS.md, código Combat y fuente de tests Health permanecen intactos.
+
+Diagnósticos fuera de las suites: el arranque conserva 14 mensajes genéricos Condition failed y el warning de layout ya observados; la ejecución final también detectó inicialización incorrecta de `FConcertSessionChallengeData::CreationTimeInTicks` (módulo Concert, ConcertMessageData.h), repetida por LogAutomationTest. Este diagnóstico adicional no apareció en la primera ejecución y queda sin resolver; no se modifican archivos del motor. El validador marca el SDK Win64 válido y otros SDKs ausentes/inválidos (incluidos LinuxArm64/VisionOS); solo se valida Win64. Git también avisa sobre futura conversión LF/CRLF de archivos de texto, sin cambiar su contenido lógico. No se validaron PIE, authoring de assets ni cook/empaquetado.

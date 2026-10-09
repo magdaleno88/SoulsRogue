@@ -1,8 +1,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "SoulsAttributeModifier.generated.h"
 
-/** C++-only operations. Percent magnitudes are fractions; multiplicative magnitudes are factors. */
+/** Editor-reflected operations, not a Blueprint mutation API. Percentages are fractions. */
+UENUM()
 enum class ESoulsAttributeModifierOperation : uint8
 {
 	Flat,
