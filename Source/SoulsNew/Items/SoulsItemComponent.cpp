@@ -132,6 +132,13 @@ bool USoulsItemComponent::HasGrant(FGuid GrantId) const
 	return OwnedItems.ContainsByPredicate([&GrantId](const FSoulsOwnedItem& Grant) { return Grant.GrantId == GrantId; });
 }
 
+USoulsItemDefinition* USoulsItemComponent::GetGrantDefinition(const FGuid& GrantId) const
+{
+	check(IsInGameThread());
+	const FSoulsOwnedItem* Found = OwnedItems.FindByPredicate([&GrantId](const FSoulsOwnedItem& Grant) { return Grant.GrantId == GrantId; });
+	return Found ? Found->Definition.Get() : nullptr;
+}
+
 bool USoulsItemComponent::HasItem(FName ItemId) const
 {
 	return OwnedItems.ContainsByPredicate([ItemId](const FSoulsOwnedItem& Grant) { return Grant.ItemId == ItemId; });

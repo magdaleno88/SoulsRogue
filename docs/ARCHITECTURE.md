@@ -2,7 +2,7 @@
 
 Fecha: 8 de octubre de 2026 (America/Mexico_City).
 
-**Estado: arquitectura propuesta con Health/modificadores y objetos universales mínimos implementados.** Las secciones de inspección describen el baseline original; las secciones 15 y 16 concretan los incrementos autorizados posteriormente. Las demás clases siguen siendo propuestas. No se ha migrado gameplay existente ni modificado assets; este documento no autoriza ejecutar todo el roadmap.
+**Estado: arquitectura propuesta con Health/modificadores, objetos universales mínimos y recompensas lógicas implementados.** Las secciones de inspección describen el baseline original; las secciones 15, 16 y 17 concretan los incrementos autorizados posteriormente. Las demás clases siguen siendo propuestas. No se ha migrado gameplay existente ni modificado assets; este documento no autoriza ejecutar todo el roadmap.
 
 ## 1. Alcance y evidencia
 
@@ -128,7 +128,7 @@ Propongo `USoulsItemDefinition : UPrimaryDataAsset` para la definición única. 
 
 ## 5. Responsabilidades y fronteras
 
-Los nombres de esta tabla siguen siendo **propuestos**, excepto `USoulsHealthComponent` y `FSoulsAttributeModifier` (sección 15), y `USoulsItemComponent`, `USoulsItemDefinition` y `FSoulsOwnedItem` (sección 16). Las tres clases base de SoulsNew ya existían.
+Los nombres de esta tabla siguen siendo **propuestos**, excepto `USoulsHealthComponent` y `FSoulsAttributeModifier` (sección 15), `USoulsItemComponent`, `USoulsItemDefinition` y `FSoulsOwnedItem` (sección 16), y `USoulsRewardComponent` y `USoulsItemReward` (sección 17). Las tres clases base de SoulsNew ya existían.
 
 | Elemento | Responsabilidad | Cuándo |
 | --- | --- | --- |
@@ -139,7 +139,8 @@ Los nombres de esta tabla siguen siendo **propuestos**, excepto `USoulsHealthCom
 | `FSoulsAttributeModifier` / handle | Contribución identificada sobre un atributo, fuente y operación | Slice, solo MaxHealth |
 | `ISoulsItemOwner` | Acceso a posesión/capacidades sin cast a Player/Boss | Slice |
 | `ASoulsItemPickup` | Recompensa en el mundo, recogida transaccional y feedback | Slice |
-| `USoulsBossRewardComponent` | Snapshot de objetos de encuentro y recompensa única en muerte confirmada | Slice, un objeto |
+| `USoulsRewardComponent` | Escuchar muerte y capturar definición de un grant seleccionado, una vez por ciclo | Implementado, selección explícita |
+| `USoulsItemReward` | RewardId, referencia a definición, Available/Claimed y claim mediante GrantItem | Implementado, recompensa lógica |
 | `ASoulsBossCharacter` | Cuerpo/presentación del boss; compone vida y objetos | Slice, boss inerte |
 | `USoulsCombatEventComponent` | Eventos locales tipados; suscripción por trigger | Después del slice; muerte puede usar delegate de Health inicialmente |
 | `USoulsCombatComponent` | Pipeline de ataques/daño, estado, costes, defensa y ventanas | Incrementos posteriores |
@@ -155,7 +156,7 @@ flowchart LR
     D --> IB[Item Component Boss]
     IP --> HP[Health Player]
     IB --> HB[Health Boss]
-    HB -->|Muerte confirmada| R[Boss Reward]
+    HB -->|Muerte confirmada| R[Recompensa lógica]
     IB -->|Identidades poseídas| R
     R --> P[Pickup con referencia a la definición]
     P -->|Grant validado| IP
@@ -163,7 +164,7 @@ flowchart LR
     HB --> UI
 ```
 
-Dirección de dependencias: Items utiliza contratos de capacidades, atributos y eventos; Health no conoce Vitalidad ni reglas de loot. BossReward conoce posesiones y muerte; Pickup conoce la API de adquisición. Ningún componente depende del widget para funcionar.
+Dirección de dependencias: Items utiliza contratos de capacidades, atributos y eventos; Health no conoce Vitalidad ni reglas de loot. RewardComponent conoce posesiones y muerte; ItemReward concede mediante Items. Pickup conoce la API de adquisición y sigue siendo futuro. Ningún componente depende del widget para funcionar.
 
 ## 6. Modelo universal de objetos
 
@@ -174,6 +175,7 @@ Dirección de dependencias: Items utiliza contratos de capacidades, atributos y 
 | Definición | ID, nombre/icono, ItemTags/categoría, requisitos, ExclusiveGroups, bloqueos, reglas, VFX/SFX | Owner, stacks actuales, cooldowns, timers |
 | Posesión por owner | DefinitionId/ref, handle, stack count, registro de concesión y estado de triggers | Copia mutada de la definición |
 | Efecto activo | Fuente/handle, objetivo/atributo, operación, magnitud y eventual expiración | Una versión Player/Boss de la regla |
+| Recompensa lógica | RewardId, misma referencia de definición, Available/Claimed, GrantId concedido al reclamar | Dependencia del Actor/grant/modificadores de origen |
 | Pickup | DefinitionId/ref, token de recompensa, estado disponible/recogiendo/consumido | Puntero necesario al boss muerto |
 
 Empezar con structs reflejados para posesión/modificadores. Añadir UObjects de ejecución por efecto solo cuando necesiten polimorfismo o estado complejo. Toda referencia persistente debe tener un ID estable; `FPrimaryAssetId` requiere redirects/migración si se renombra un asset. Los assets retenidos en runtime deben estar protegidos de GC/carga descargada mediante ownership reflejado o handles de carga apropiados.
@@ -551,3 +553,45 @@ La suite SoulsNew.Items contiene los 12 casos A–L solicitados y 8 pruebas adic
 Validación final: SoulsNewEditor Win64 Development compilado con UE 5.8.3 mediante UBT/UHT, usando `-NoPCH -NoUBA -MaxParallelActions=1`; salida 0, sin warnings de compilación. `Automation RunTests SoulsNew.` ejecutado con UnrealEditor-Cmd, `/Engine/Maps/Entry`, `-nullrhi -nosound -unattended`: **20/20 Items y 15/15 Health Success, cero fallos/warnings en las suites**, salida 0. Evidencia local: `Saved/Logs/ItemsPhase-EditorBuild-Validated.log`, `Saved/Logs/ItemsPhase-Automation-Validated.log` y `Saved/Automation/ItemsPhase-Validated/index.json`. La comprobación de hashes confirma que los 753 assets/mapas originales, Config, AGENTS.md, código Combat y fuente de tests Health permanecen intactos.
 
 Diagnósticos fuera de las suites: el arranque conserva 14 mensajes genéricos Condition failed y el warning de layout ya observados; la ejecución final también detectó inicialización incorrecta de `FConcertSessionChallengeData::CreationTimeInTicks` (módulo Concert, ConcertMessageData.h), repetida por LogAutomationTest. Este diagnóstico adicional no apareció en la primera ejecución y queda sin resolver; no se modifican archivos del motor. El validador marca el SDK Win64 válido y otros SDKs ausentes/inválidos (incluidos LinuxArm64/VisionOS); solo se valida Win64. Git también avisa sobre futura conversión LF/CRLF de archivos de texto, sin cambiar su contenido lógico. No se validaron PIE, authoring de assets ni cook/empaquetado.
+
+## 17. Tercera implementación: recompensa lógica por muerte
+
+Este incremento añade `Items/SoulsItemReward.{h,cpp}`, `Items/SoulsRewardComponent.{h,cpp}` y `Tests/SoulsRewardTests.cpp`. Solo añade a ItemComponent la consulta C++ `GetGrantDefinition(GrantId)`, que devuelve una referencia prestada o nullptr; quien necesite retenerla debe protegerla frente a GC. No cambia Health, efectos, fórmula ni grants. No crea pickup físico, selección aleatoria, actores de boss/player, UI, persistencia, dependencias ni contenido.
+
+### Representación e identidades
+
+`USoulsItemReward : UObject` es una instancia transitoria independiente, con `RewardId` FGuid nuevo, referencia fuerte reflejada `TObjectPtr<USoulsItemDefinition>`, estado Available/Claimed y el GrantId confirmado al reclamar. Su Outer es el paquete transitorio, no el actor de origen. Conserva **exactamente el mismo UObject de definición**: no copia ni recrea Vitalidad ni retiene el grant/modificadores de origen. ItemId sigue identificando la definición; RewardId identifica esta recompensa; el nuevo GrantId y sus ModifierIds los genera exclusivamente GrantItem, independientes de los IDs del origen.
+
+RewardComponent retiene la recompensa mediante UPROPERTY. La recompensa retiene la definición incluso después de retirar el grant o destruir el actor original. Un consumidor que la conserve más allá del componente debe mantener su propia UPROPERTY o TStrongObjectPtr; el puntero devuelto por GetReward no basta por sí solo. Liberados todos los poseedores, recompensa y definición pueden ser recolectadas. No hay ownership global ni persistencia entre niveles.
+
+### Generación y fuente
+
+`USoulsRewardComponent : UActorComponent` no usa Tick. `ConfigureSourceGrant` requiere un Actor vivo con exactamente un Health y un ItemComponent válidos del mismo propietario y un grant existente. Guarda SourceGrantId y referencias débiles a esos componentes; escucha el delegate nativo Death de Health mediante AddUObject. Una configuración fallida deja intacta la selección anterior. EndPlay/OnComponentDestroyed retiran la suscripción y no generan recompensas.
+
+En Death confirmado, el componente bloquea reentrada y marca la muerte atendida **antes** de consultar el grant seleccionado. Captura su definición actual mediante la API pública de Items, crea una recompensa Available y solo entonces publica RewardGenerated (nativo y después Blueprint). Daño adicional, notificaciones repetidas o generación recursiva no producen otra recompensa/evento. Si el grant desapareció **antes** de la muerte, registra InvalidGrant sin recompensa y sin reintentos en ese ciclo; no inventa una recompensa desde una configuración antigua. Retirarlo **después** de generar no afecta la referencia capturada.
+
+El origen se configura explícitamente en esta fase. La frontera futura es resolver el grant que se premiará desde las posesiones válidas del encuentro, antes de capturar su definición. Seleccionar uno de tres con RNG sustituirá esa selección, sin alterar ItemReward, Claim ni la concesión universal. No se implementan RNG, snapshots de tres objetos ni loot tables ahora.
+
+### Claim, atomicidad y eventos
+
+Claim(TargetItemComponent, OutGrantId) solo usa la definición y `Target->GrantItem`; no conoce Health, Vitalidad ni magnitudes. Requiere game thread. Primero invalida el output y valida estado/target. Un guard interno bClaiming permanece activo durante GrantItem y los eventos de claim; un intento recursivo devuelve Busy y no concede nada.
+
+La recompensa permanece Available durante la concesión. Si GrantItem falla, devuelve GrantRejected, sin consumirla ni emitir RewardClaimed. Items conserva sus garantías de validación y rollback atómico del lote de efectos. Tras Success, Claim comprueba que el target siga válido y que el grant nuevo siga existiendo con **la misma definición**: un callback ItemGranted puede destruir Items y retirar sus grants antes de que GrantItem regrese. En ese caso devuelve GrantLost, conserva Available y no emite un claim falso. La limpieza de contribuciones corresponde al ItemComponent existente.
+
+Solo después de esas comprobaciones se confirman Claimed, ClaimedGrantId y output; se publica RewardClaimed (recompensa, target, GrantId), nativo y después Blueprint. Un segundo claim devuelve AlreadyClaimed, incluso hacia otro target. Los eventos notifican operaciones confirmadas; una retirada posterior del grant por otro consumidor no devuelve la recompensa a Available. Las referencias fuertes locales protegen recompensa/target durante callbacks y GC, sin prolongar su uso lógico tras destrucción.
+
+Los únicos eventos nuevos son RewardGenerated y RewardClaimed. Blueprint tiene getters/eventos para observación; ConfigureSourceGrant, Rearm y Claim son APIs C++ validadas. No se añade un bus global. Un listener de RewardGenerated puede reclamar inmediatamente hacia otro propietario; Configure/Rearm durante generación devuelve Busy.
+
+### Reinicio explícito
+
+ResetHealthForNewLife no rearma automáticamente recompensas. Rearm requiere Health vivo, los componentes configurados todavía válidos, SourceGrantId existente y cualquier recompensa anterior **Claimed**. Si sigue Available, devuelve PendingReward y la conserva; así no se pierde una recompensa pendiente. Si Health sigue muerto, devuelve OwnerDead. Puede configurarse un grant nuevo después del reset si el anterior fue retirado.
+
+Rearm correcto libera el slot actual, limpia la marca de muerte atendida y prepara una nueva recompensa/RewardId para la siguiente muerte. Una recompensa antigua retenida externamente sigue Claimed. Rearm repetido mientras ya está armado no genera nada. Tras un fallo de generación por grant perdido, reset + configurar un grant válido + Rearm permiten un nuevo ciclo. No se implementa respawn.
+
+### Pruebas
+
+SoulsNew.Rewards contiene 20 Automation Tests: A–L, EndToEnd y siete casos de reset/rearme explícito, conservación de pendientes, lifetime de definición frente a GC, destrucción sin derrota, fuente inválida/perdida, destrucción del target durante concesión y recompensa que sobrevive al origen. Los fixtures son Actors/mundos/definiciones transitorios. EndToEnd usa una única definición `MaxHealth / AdditivePercent / 0.25` para demostrar `500 -> 625 -> Death -> Reward -> Claim -> 100 -> 125`, con identidad de definición y nuevas identidades runtime.
+
+Validación final: SoulsNewEditor Win64 Development compilado con UE 5.8.3 mediante UBT/UHT (sin Live Coding), con `-NoPCH -NoUBA -MaxParallelActions=1`; salida 0 y sin warnings de compilación. UnrealEditor-Cmd ejecutó `Automation RunTests SoulsNew.` con `/Engine/Maps/Entry`, `-nullrhi -nosound -unattended`: **15/15 Health, 20/20 Items y 20/20 Rewards Success, cero fallos/warnings en las tres suites**, salida 0. Evidencia local: `Saved/Logs/RewardsPhase-EditorBuild-Validated.log`, `Saved/Logs/RewardsPhase-Automation-Validated.log` y `Saved/Automation/RewardsPhase-Validated/index.json`. Los hashes confirman conservación de los 753 assets/mapas, Config, AGENTS.md, Combat, Health y tests anteriores. Solo se añade la consulta de definición en el código previo de Items.
+
+La primera ejecución pasó los 55 tests, pero tres casos de destrucción de Actor emitieron `World has no context` por el fixture. Se corrigió registrando/liberando su contexto de mundo; se recompiló y repitió la suite completa, sin esos warnings. El arranque final mantiene los 14 `Condition failed` y el warning de layout previamente observados, fuera de los tests; su causa sigue sin diagnosticar. En esta ejecución no apareció el diagnóstico de Concert registrado en la fase anterior. El validador confirma Win64 válido y otros SDKs ausentes/inválidos, incluidos LinuxArm64/VisionOS. Git avisa de conversión futura LF/CRLF. No se validaron PIE ni cook/empaquetado; no se implementó la siguiente fase.

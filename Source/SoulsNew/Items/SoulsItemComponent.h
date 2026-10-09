@@ -69,6 +69,8 @@ public:
 	ESoulsItemResult GrantItem(USoulsItemDefinition* Definition, FGuid& OutGrantId);
 	ESoulsItemResult RemoveItem(const FGuid& GrantId);
 	bool FindGrant(const FGuid& GrantId, FSoulsItemGrantSnapshot& OutGrant) const;
+	/** Borrowed immutable definition; callers retaining it must use a GC-safe reference. */
+	USoulsItemDefinition* GetGrantDefinition(const FGuid& GrantId) const;
 
 	UFUNCTION(BlueprintPure, Category="SoulsNew|Items")
 	int32 GetGrantCount() const { return OwnedItems.Num(); }
