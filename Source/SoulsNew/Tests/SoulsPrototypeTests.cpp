@@ -67,13 +67,22 @@ namespace SoulsPrototypeTests
 			Test.TestNotNull(TEXT("Real ThirdPerson player instance"), Actor);
 			return Actor;
 		}
-		ASoulsPrototypeBoss* Boss(FAutomationTestBase& Test, FName Name = NAME_None)
+		ASoulsPrototypeBoss* Boss(FAutomationTestBase& Test, FName Name = NAME_None, bool bAssignDefinition = true, USoulsItemDefinition* Definition = nullptr)
 		{
 			FActorSpawnParameters Parameters;
 			Parameters.Name = Name;
 			Parameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+			Parameters.bDeferConstruction = true;
 			auto* Actor = World->SpawnActor<ASoulsPrototypeBoss>(FVector(1000, 0, 100), FRotator::ZeroRotator, Parameters);
 			Test.TestNotNull(TEXT("Prototype boss instance"), Actor);
+			if (!Actor) { return nullptr; }
+			if (bAssignDefinition)
+			{
+				if (!Definition) { Definition = LoadObject<USoulsItemDefinition>(nullptr, TEXT("/Game/SoulsNew/Items/DA_Item_Vitality.DA_Item_Vitality")); }
+				if (!Test.TestNotNull(TEXT("Configured definition asset"), Definition)) { Actor->Destroy(); return nullptr; }
+				Test.TestTrue(TEXT("Configure before BeginPlay"), Actor->SetPrototypeItemDefinition(Definition));
+			}
+			Actor->FinishSpawning(FTransform(FVector(1000, 0, 100)));
 			return Actor;
 		}
 	};
@@ -163,7 +172,7 @@ bool FSoulsPrototypeDTest::RunTest(const FString& Parameters)
 	auto* Boss = F.Boss(*this);
 	if (!Boss) { return false; }
 	auto* Definition = Boss->GetPrototypeDefinition();
-	TestTrue(TEXT("Transient definition"), Definition->HasAnyFlags(RF_Transient));
+	TestFalse(TEXT("Configured persistent definition asset"), Definition->HasAnyFlags(RF_Transient));
 	TestTrue(TEXT("Source grant holds exact prototype definition"), Boss->GetSoulsItems()->GetGrantDefinition(Boss->GetPrototypeGrantId()) == Definition);
 	if (!SoulsPrototypeTests::Kill(*this, Boss)) { return false; }
 	TestTrue(TEXT("Reward captures exact definition"), Boss->GetRewards()->GetReward()->GetItemDefinition() == Definition);
@@ -272,8 +281,10 @@ bool FSoulsPrototypeJTest::RunTest(const FString& Parameters)
 		auto* Player = F.Player(*this);
 		if (!Player) { return false; }
 		SoulsPrototypeTests::Components(*this, Player);
+#if WITH_EDITOR
 		Player->RerunConstructionScripts();
 		Player->RerunConstructionScripts();
+#endif
 		SoulsPrototypeTests::Components(*this, Player);
 		TestEqual(TEXT("No grant on reconstruction"), Player->GetSoulsItems()->GetGrantCount(), 0);
 	}
@@ -347,6 +358,165 @@ bool FSoulsPrototypeSelectionTest::RunTest(const FString& Parameters)
 }
 #endif
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsDataAssetATest, "SoulsNew.DataAssets.A.BossWithoutDefinition", SoulsPrototypeTests::Flags)
+bool FSoulsDataAssetATest::RunTest(const FString& Parameters)
+{
+	AddExpectedMessagePlain(TEXT("PrototypeItemDefinition is missing"), ELogVerbosity::Warning);
+	SoulsPrototypeTests::FFixture F;
+	auto* Boss = F.Boss(*this, NAME_None, false);
+	if (!Boss) { return false; }
+	TestEqual(TEXT("Unconfigured base"), Boss->GetSoulsHealth()->GetBaseMaxHealth(), 500.0f);
+	TestEqual(TEXT("Unconfigured max"), Boss->GetSoulsHealth()->GetMaxHealth(), 500.0f);
+	TestEqual(TEXT("Unconfigured current"), Boss->GetSoulsHealth()->GetCurrentHealth(), 500.0f);
+	TestEqual(TEXT("No grant"), Boss->GetSoulsItems()->GetGrantCount(), 0);
+	TestFalse(TEXT("No source grant"), Boss->GetRewards()->GetSourceGrantId().IsValid());
+	TestFalse(TEXT("Not ready for debug kill"), Boss->IsPrototypeReady());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsDataAssetBTest, "SoulsNew.DataAssets.B.BossWithDataDefinition", SoulsPrototypeTests::Flags)
+bool FSoulsDataAssetBTest::RunTest(const FString& Parameters)
+{
+	SoulsPrototypeTests::FFixture F;
+	auto* Boss = F.Boss(*this);
+	if (!Boss) { return false; }
+	TestEqual(TEXT("Base"), Boss->GetSoulsHealth()->GetBaseMaxHealth(), 500.0f);
+	TestEqual(TEXT("Data-driven max"), Boss->GetSoulsHealth()->GetMaxHealth(), 625.0f);
+	TestTrue(TEXT("Same configured definition in grant"), Boss->GetSoulsItems()->GetGrantDefinition(Boss->GetPrototypeGrantId()) == Boss->GetPrototypeDefinition());
+	TestTrue(TEXT("Persistent asset"), !Boss->GetPrototypeDefinition()->HasAnyFlags(RF_Transient));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsDataAssetCTest, "SoulsNew.DataAssets.C.NoRuntimeVitalityConstruction", SoulsPrototypeTests::Flags)
+bool FSoulsDataAssetCTest::RunTest(const FString& Parameters)
+{
+	AddExpectedMessagePlain(TEXT("PrototypeItemDefinition is missing"), ELogVerbosity::Warning);
+	SoulsPrototypeTests::FFixture F;
+	auto* Boss = F.Boss(*this, NAME_None, false);
+	if (!Boss) { return false; }
+	TestNull(TEXT("No synthesized definition"), Boss->GetPrototypeDefinition());
+	TestFalse(TEXT("No synthesized grant id"), Boss->GetPrototypeGrantId().IsValid());
+	Boss->GetSoulsHealth()->TakeDamage(500.0f);
+	TestNull(TEXT("No synthesized reward"), Boss->GetRewards()->GetReward());
+	TestNull(TEXT("No fallback pickup"), Boss->GetDropSpawner()->GetActivePickup());
+	TestEqual(TEXT("No effect even after death"), Boss->GetSoulsHealth()->GetMaxHealth(), 500.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsDataAssetDTest, "SoulsNew.DataAssets.D.SameDefinitionEndToEnd", SoulsPrototypeTests::Flags)
+bool FSoulsDataAssetDTest::RunTest(const FString& Parameters)
+{
+	SoulsPrototypeTests::FFixture F;
+	auto* Player = F.Player(*this);
+	auto* Boss = F.Boss(*this);
+	if (!Player || !Boss) { return false; }
+	auto* Definition = Boss->GetPrototypeDefinition();
+	auto* Pickup = SoulsPrototypeTests::Kill(*this, Boss);
+	if (!Pickup) { return false; }
+	auto* Reward = Pickup->GetReward();
+	TestTrue(TEXT("Boss grant == configured asset"), Boss->GetSoulsItems()->GetGrantDefinition(Boss->GetPrototypeGrantId()) == Definition);
+	TestTrue(TEXT("Reward == configured asset"), Reward->GetItemDefinition() == Definition);
+	FGuid PlayerGrant;
+	Pickup->PickupClaimed().AddLambda([&](ASoulsItemPickup*, AActor*, FGuid Grant) { PlayerGrant = Grant; });
+	F.World->Tick(LEVELTICK_All, 1.0f / 60.0f);
+	Player->SetActorLocation(Pickup->GetActorLocation(), false, nullptr, ETeleportType::TeleportPhysics);
+	Player->GetCapsuleComponent()->UpdateOverlaps();
+	TestTrue(TEXT("Real overlap claims asset"), PlayerGrant.IsValid());
+	TestTrue(TEXT("Player grant == configured asset"), Player->GetSoulsItems()->GetGrantDefinition(PlayerGrant) == Definition);
+	TestTrue(TEXT("Reward claimed"), Reward->GetState() == ESoulsItemRewardState::Claimed);
+	TestTrue(TEXT("Pickup consumed"), Pickup->IsConsumed() && Pickup->IsActorBeingDestroyed());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsDataAssetETest, "SoulsNew.DataAssets.E.PlayerResult", SoulsPrototypeTests::Flags)
+bool FSoulsDataAssetETest::RunTest(const FString& Parameters)
+{
+	SoulsPrototypeTests::FFixture F;
+	auto* Player = F.Player(*this);
+	auto* Boss = F.Boss(*this);
+	if (!Player || !Boss) { return false; }
+	auto* Pickup = SoulsPrototypeTests::Kill(*this, Boss);
+	if (!Pickup) { return false; }
+	FGuid Grant;
+	TestTrue(TEXT("Normal pickup claim"), Pickup->TryClaimForActor(Player, Grant) == ESoulsPickupClaimResult::Success);
+	TestEqual(TEXT("Base preserved"), Player->GetSoulsHealth()->GetBaseMaxHealth(), 100.0f);
+	TestEqual(TEXT("Max"), Player->GetSoulsHealth()->GetMaxHealth(), 125.0f);
+	TestEqual(TEXT("Current follows PreservePercentage"), Player->GetSoulsHealth()->GetCurrentHealth(), 125.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsDataAssetFTest, "SoulsNew.DataAssets.F.ExistingCoreRegression", SoulsPrototypeTests::Flags)
+bool FSoulsDataAssetFTest::RunTest(const FString& Parameters)
+{
+	SoulsPrototypeTests::FFixture F;
+	auto* Player = F.Player(*this);
+	if (!Player) { return false; }
+	auto* Definition = LoadObject<USoulsItemDefinition>(nullptr, TEXT("/Game/SoulsNew/Items/DA_Item_Vitality.DA_Item_Vitality"));
+	FGuid First, Second;
+	if (!TestTrue(TEXT("First data asset grant"), Player->GetSoulsItems()->GrantItem(Definition, First) == ESoulsItemResult::Success)) { return false; }
+	Player->GetSoulsHealth()->TakeDamage(62.5f);
+	TestTrue(TEXT("Second independent grant"), Player->GetSoulsItems()->GrantItem(Definition, Second) == ESoulsItemResult::Success);
+	TestEqual(TEXT("Existing additive stacking"), Player->GetSoulsHealth()->GetMaxHealth(), 150.0f);
+	TestEqual(TEXT("Existing PreservePercentage"), Player->GetSoulsHealth()->GetCurrentHealth(), 75.0f);
+	TestTrue(TEXT("Remove first"), Player->GetSoulsItems()->RemoveItem(First) == ESoulsItemResult::Success);
+	TestEqual(TEXT("Independent second effect"), Player->GetSoulsHealth()->GetMaxHealth(), 125.0f);
+	TestTrue(TEXT("Remove second"), Player->GetSoulsItems()->RemoveItem(Second) == ESoulsItemResult::Success);
+	TestEqual(TEXT("Return to base"), Player->GetSoulsHealth()->GetMaxHealth(), 100.0f);
+	TestEqual(TEXT("Percentage preserved on withdrawal"), Player->GetSoulsHealth()->GetCurrentHealth(), 50.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsDataAssetGTest, "SoulsNew.DataAssets.G.RealVitalityAssetLoads", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FSoulsDataAssetGTest::RunTest(const FString& Parameters)
+{
+	auto* Definition = LoadObject<USoulsItemDefinition>(nullptr, TEXT("/Game/SoulsNew/Items/DA_Item_Vitality.DA_Item_Vitality"));
+	if (!TestNotNull(TEXT("Real content asset loads"), Definition)) { return false; }
+	TestFalse(TEXT("Not transient"), Definition->HasAnyFlags(RF_Transient));
+	const auto& Data = Definition->GetData();
+	TestTrue(TEXT("Logical ID"), Data.ItemId == FName(TEXT("Item.Vitality")));
+	TestEqual(TEXT("Display name"), Data.DisplayName.ToString(), FString(TEXT("Vitalidad")));
+	TestFalse(TEXT("Description authored"), Data.Description.IsEmpty());
+	if (!TestEqual(TEXT("Exactly one effect"), Data.Effects.Num(), 1)) { return false; }
+	TestTrue(TEXT("MaxHealth"), Data.Effects[0].Attribute == ESoulsItemAttribute::MaxHealth);
+	TestTrue(TEXT("AdditivePercent"), Data.Effects[0].Operation == ESoulsAttributeModifierOperation::AdditivePercent);
+	TestEqual(TEXT("Exactly 0.25 (rejects 25, 1.25, 0.025)"), Data.Effects[0].Magnitude, 0.25f);
+	TestTrue(TEXT("No invented tags"), Data.ItemTags.IsEmpty() && Data.ExclusiveGroups.IsEmpty());
+	TestTrue(TEXT("Logical primary id"), Definition->GetPrimaryAssetId() == FPrimaryAssetId(FPrimaryAssetType(TEXT("SoulsItem")), TEXT("Item.Vitality")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsDataAssetHTest, "SoulsNew.DataAssets.H.ConfigurationBeforePlayOnly", SoulsPrototypeTests::Flags)
+bool FSoulsDataAssetHTest::RunTest(const FString& Parameters)
+{
+	SoulsPrototypeTests::FFixture F;
+	auto* Boss = F.Boss(*this);
+	if (!Boss) { return false; }
+	auto* Definition = Boss->GetPrototypeDefinition();
+	TestFalse(TEXT("No runtime configuration replacement"), Boss->SetPrototypeItemDefinition(nullptr));
+	TestTrue(TEXT("Configured definition unchanged"), Boss->GetPrototypeDefinition() == Definition);
+	TestEqual(TEXT("Grant unchanged"), Boss->GetSoulsItems()->GetGrantCount(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsDataAssetITest, "SoulsNew.DataAssets.I.BossUsesArbitraryDefinition", SoulsPrototypeTests::Flags)
+bool FSoulsDataAssetITest::RunTest(const FString& Parameters)
+{
+	SoulsPrototypeTests::FFixture F;
+	FSoulsItemDefinitionData Data;
+	Data.ItemId = TEXT("Test.FlatHealth");
+	Data.DisplayName = FText::FromString(TEXT("Test flat health"));
+	FSoulsItemEffect Effect;
+	Effect.Attribute = ESoulsItemAttribute::MaxHealth;
+	Effect.Operation = ESoulsAttributeModifierOperation::Flat;
+	Effect.Magnitude = 10.0f;
+	Data.Effects.Add(Effect);
+	auto* Definition = USoulsItemDefinition::CreateTransient(Data); // Test input only; boss never creates definitions.
+	auto* Boss = F.Boss(*this, NAME_None, true, Definition);
+	if (!Boss) { return false; }
+	TestEqual(TEXT("Generic configured effect, no hidden 25 percent"), Boss->GetSoulsHealth()->GetMaxHealth(), 510.0f);
+	TestTrue(TEXT("Exact arbitrary definition retained"), Boss->GetPrototypeDefinition() == Definition);
+	return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsPrototypePhysicalTest, "SoulsNew.Prototype.EndToEndRealPlayerOverlap", SoulsPrototypeTests::Flags)
 bool FSoulsPrototypePhysicalTest::RunTest(const FString& Parameters)
 {

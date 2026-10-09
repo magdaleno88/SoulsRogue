@@ -25,3 +25,6 @@ Desktop.ini
 
 # Build artifacts
 Build/Receipts/
+
+# Unreal generated file-open-order logs
+Build/*/FileOpenOrder/

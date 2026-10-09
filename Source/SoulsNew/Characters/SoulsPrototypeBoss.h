@@ -27,7 +27,9 @@ public:
 	USoulsItemComponent* GetSoulsItems() const { return Items; }
 	USoulsRewardComponent* GetRewards() const { return Rewards; }
 	USoulsRewardDropSpawnerComponent* GetDropSpawner() const { return DropSpawner; }
-	USoulsItemDefinition* GetPrototypeDefinition() const { return PrototypeDefinition; }
+	USoulsItemDefinition* GetPrototypeDefinition() const { return PrototypeItemDefinition; }
+	/** Configure before BeginPlay (including deferred spawn). No runtime loadout replacement. */
+	bool SetPrototypeItemDefinition(USoulsItemDefinition* Definition);
 	FGuid GetPrototypeGrantId() const { return PrototypeGrantId; }
 	bool IsPrototypeReady() const { return bPrototypeReady; }
 	UStaticMeshComponent* GetPrototypeMesh() const { return VisualMesh; }
@@ -52,9 +54,9 @@ private:
 	TObjectPtr<USoulsRewardDropSpawnerComponent> DropSpawner;
 	UPROPERTY(EditDefaultsOnly, Category="Prototype")
 	TSoftObjectPtr<UStaticMesh> VisualMeshAsset;
-	/** Temporary authored data for this prototype; replace with a real definition asset later. */
-	UPROPERTY(Transient)
-	TObjectPtr<USoulsItemDefinition> PrototypeDefinition;
+	/** Strong authored reference: serialized actors retain and cook their configured definition. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Prototype|Items", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<USoulsItemDefinition> PrototypeItemDefinition;
 	UPROPERTY(Transient)
 	FGuid PrototypeGrantId;
 	bool bPrototypeReady = false;

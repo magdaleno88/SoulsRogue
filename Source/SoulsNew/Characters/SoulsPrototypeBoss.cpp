@@ -56,16 +56,12 @@ void ASoulsPrototypeBoss::BeginPlay()
 #if !UE_BUILD_SHIPPING
 	UE_LOG(LogSoulsNew, Display, TEXT("[SoulsPrototype] Boss base health: %g; MaxHealth before item: %g"), Health->GetBaseMaxHealth(), Health->GetMaxHealth());
 #endif
-	FSoulsItemDefinitionData Data;
-	Data.ItemId = TEXT("Item.Vitality");
-	Data.DisplayName = FText::FromString(TEXT("Vitalidad (prototype)"));
-	FSoulsItemEffect Effect;
-	Effect.Attribute = ESoulsItemAttribute::MaxHealth;
-	Effect.Operation = ESoulsAttributeModifierOperation::AdditivePercent;
-	Effect.Magnitude = 0.25f;
-	Data.Effects.Add(Effect);
-	PrototypeDefinition = USoulsItemDefinition::CreateTransient(Data);
-	if (Items->GrantItem(PrototypeDefinition, PrototypeGrantId) != ESoulsItemResult::Success)
+	if (!PrototypeItemDefinition)
+	{
+		UE_LOG(LogSoulsNew, Warning, TEXT("[SoulsPrototype] %s: PrototypeItemDefinition is missing. Assign an ItemDefinition in Details before Play; base health retained and no source grant configured."), *GetName());
+		return;
+	}
+	if (Items->GrantItem(PrototypeItemDefinition, PrototypeGrantId) != ESoulsItemResult::Success)
 	{
 		UE_LOG(LogSoulsNew, Error, TEXT("[SoulsPrototype] %s: prototype item grant failed."), *GetName());
 		return;
@@ -81,8 +77,8 @@ void ASoulsPrototypeBoss::BeginPlay()
 	DeathVisualHandle = Health->Death().AddUObject(this, &ASoulsPrototypeBoss::HandleDeathVisual);
 	bPrototypeReady = true;
 #if !UE_BUILD_SHIPPING
-	UE_LOG(LogSoulsNew, Display, TEXT("[SoulsPrototype] Vitality granted to boss: MaxHealth=%g Base=%g Grant=%s"),
-		Health->GetMaxHealth(), Health->GetBaseMaxHealth(), *PrototypeGrantId.ToString());
+	UE_LOG(LogSoulsNew, Display, TEXT("[SoulsPrototype] Item %s granted to boss: MaxHealth=%g Base=%g Grant=%s Definition=%s"),
+		*PrototypeItemDefinition->GetItemId().ToString(), Health->GetMaxHealth(), Health->GetBaseMaxHealth(), *PrototypeGrantId.ToString(), *PrototypeItemDefinition->GetPathName());
 	RewardLogHandle = Rewards->RewardGenerated().AddUObject(this, &ASoulsPrototypeBoss::LogRewardGenerated);
 	SpawnLogHandle = DropSpawner->PickupSpawned().AddUObject(this, &ASoulsPrototypeBoss::LogPickupSpawned);
 	SpawnFailureLogHandle = DropSpawner->PickupSpawnFailed().AddWeakLambda(this,
@@ -92,6 +88,14 @@ void ASoulsPrototypeBoss::BeginPlay()
 				static_cast<int32>(Reason), *Reward->GetRewardId().ToString());
 		});
 #endif
+}
+
+bool ASoulsPrototypeBoss::SetPrototypeItemDefinition(USoulsItemDefinition* Definition)
+{
+	check(IsInGameThread());
+	if (HasActorBegunPlay() || IsActorBeginningPlay() || IsActorBeingDestroyed()) { return false; }
+	PrototypeItemDefinition = Definition;
+	return true;
 }
 
 void ASoulsPrototypeBoss::HandleDeathVisual(USoulsHealthComponent* Sender)

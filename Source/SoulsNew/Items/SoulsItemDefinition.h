@@ -55,7 +55,7 @@ struct SOULSNEW_API FSoulsItemDefinitionData
 	FGameplayTagContainer ExclusiveGroups;
 };
 
-/** Shared read-only runtime definition; editable defaults for future authoring, no assets required. */
+/** Shared read-only runtime definition; editable Data Asset content, no owner or execution state. */
 UCLASS(BlueprintType)
 class SOULSNEW_API USoulsItemDefinition : public UPrimaryDataAsset
 {
