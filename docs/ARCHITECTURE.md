@@ -2,7 +2,7 @@
 
 Fecha: 8 de octubre de 2026 (America/Mexico_City).
 
-**Estado: arquitectura propuesta con Health/modificadores, objetos universales mínimos y recompensas lógicas implementados.** Las secciones de inspección describen el baseline original; las secciones 15, 16 y 17 concretan los incrementos autorizados posteriormente. Las demás clases siguen siendo propuestas. No se ha migrado gameplay existente ni modificado assets; este documento no autoriza ejecutar todo el roadmap.
+**Estado: arquitectura propuesta con Health/modificadores, objetos universales mínimos, recompensas lógicas y pickup físico mínimo implementados.** Las secciones de inspección describen el baseline original; las secciones 15, 16, 17 y 18 concretan los incrementos autorizados posteriormente. Las demás clases siguen siendo propuestas. No se ha migrado gameplay existente ni modificado assets; este documento no autoriza ejecutar todo el roadmap.
 
 ## 1. Alcance y evidencia
 
@@ -128,7 +128,7 @@ Propongo `USoulsItemDefinition : UPrimaryDataAsset` para la definición única. 
 
 ## 5. Responsabilidades y fronteras
 
-Los nombres de esta tabla siguen siendo **propuestos**, excepto `USoulsHealthComponent` y `FSoulsAttributeModifier` (sección 15), `USoulsItemComponent`, `USoulsItemDefinition` y `FSoulsOwnedItem` (sección 16), y `USoulsRewardComponent` y `USoulsItemReward` (sección 17). Las tres clases base de SoulsNew ya existían.
+Los nombres de esta tabla siguen siendo **propuestos**, excepto `USoulsHealthComponent` y `FSoulsAttributeModifier` (sección 15), `USoulsItemComponent`, `USoulsItemDefinition` y `FSoulsOwnedItem` (sección 16), `USoulsRewardComponent` y `USoulsItemReward` (sección 17), y `ASoulsItemPickup` (sección 18). Las tres clases base de SoulsNew ya existían.
 
 | Elemento | Responsabilidad | Cuándo |
 | --- | --- | --- |
@@ -138,7 +138,7 @@ Los nombres de esta tabla siguen siendo **propuestos**, excepto `USoulsHealthCom
 | `FSoulsOwnedItem` | Referencia/ID de definición, handle de posesión y estado del owner | Slice |
 | `FSoulsAttributeModifier` / handle | Contribución identificada sobre un atributo, fuente y operación | Slice, solo MaxHealth |
 | `ISoulsItemOwner` | Acceso a posesión/capacidades sin cast a Player/Boss | Slice |
-| `ASoulsItemPickup` | Recompensa en el mundo, recogida transaccional y feedback | Slice |
+| `ASoulsItemPickup` | Retener Reward, overlap con Actor compatible, Claim y consumo físico tras éxito | Implementado, aislado |
 | `USoulsRewardComponent` | Escuchar muerte y capturar definición de un grant seleccionado, una vez por ciclo | Implementado, selección explícita |
 | `USoulsItemReward` | RewardId, referencia a definición, Available/Claimed y claim mediante GrantItem | Implementado, recompensa lógica |
 | `ASoulsBossCharacter` | Cuerpo/presentación del boss; compone vida y objetos | Slice, boss inerte |
@@ -158,13 +158,13 @@ flowchart LR
     IB --> HB[Health Boss]
     HB -->|Muerte confirmada| R[Recompensa lógica]
     IB -->|Identidades poseídas| R
-    R --> P[Pickup con referencia a la definición]
-    P -->|Grant validado| IP
+    R --> P[Pickup con referencia a Reward]
+    P -->|Claim de Reward y GrantItem validado| IP
     HP --> UI[UI / VFX / SFX]
     HB --> UI
 ```
 
-Dirección de dependencias: Items utiliza contratos de capacidades, atributos y eventos; Health no conoce Vitalidad ni reglas de loot. RewardComponent conoce posesiones y muerte; ItemReward concede mediante Items. Pickup conoce la API de adquisición y sigue siendo futuro. Ningún componente depende del widget para funcionar.
+Dirección de dependencias: Items utiliza contratos de capacidades, atributos y eventos; Health no conoce Vitalidad ni reglas de loot. RewardComponent conoce posesiones y muerte; ItemReward concede mediante Items. Pickup retiene ItemReward y solicita Claim hacia un ItemComponent. Ningún componente depende del widget para funcionar.
 
 ## 6. Modelo universal de objetos
 
@@ -176,7 +176,7 @@ Dirección de dependencias: Items utiliza contratos de capacidades, atributos y 
 | Posesión por owner | DefinitionId/ref, handle, stack count, registro de concesión y estado de triggers | Copia mutada de la definición |
 | Efecto activo | Fuente/handle, objetivo/atributo, operación, magnitud y eventual expiración | Una versión Player/Boss de la regla |
 | Recompensa lógica | RewardId, misma referencia de definición, Available/Claimed, GrantId concedido al reclamar | Dependencia del Actor/grant/modificadores de origen |
-| Pickup | DefinitionId/ref, token de recompensa, estado disponible/recogiendo/consumido | Puntero necesario al boss muerto |
+| Pickup | Referencia a Reward, guard de interacción y consumo físico | Copia de definición/recompensa o puntero necesario al boss muerto |
 
 Empezar con structs reflejados para posesión/modificadores. Añadir UObjects de ejecución por efecto solo cuando necesiten polimorfismo o estado complejo. Toda referencia persistente debe tener un ID estable; `FPrimaryAssetId` requiere redirects/migración si se renombra un asset. Los assets retenidos en runtime deben estar protegidos de GC/carga descargada mediante ownership reflejado o handles de carga apropiados.
 
@@ -595,3 +595,49 @@ SoulsNew.Rewards contiene 20 Automation Tests: A–L, EndToEnd y siete casos de 
 Validación final: SoulsNewEditor Win64 Development compilado con UE 5.8.3 mediante UBT/UHT (sin Live Coding), con `-NoPCH -NoUBA -MaxParallelActions=1`; salida 0 y sin warnings de compilación. UnrealEditor-Cmd ejecutó `Automation RunTests SoulsNew.` con `/Engine/Maps/Entry`, `-nullrhi -nosound -unattended`: **15/15 Health, 20/20 Items y 20/20 Rewards Success, cero fallos/warnings en las tres suites**, salida 0. Evidencia local: `Saved/Logs/RewardsPhase-EditorBuild-Validated.log`, `Saved/Logs/RewardsPhase-Automation-Validated.log` y `Saved/Automation/RewardsPhase-Validated/index.json`. Los hashes confirman conservación de los 753 assets/mapas, Config, AGENTS.md, Combat, Health y tests anteriores. Solo se añade la consulta de definición en el código previo de Items.
 
 La primera ejecución pasó los 55 tests, pero tres casos de destrucción de Actor emitieron `World has no context` por el fixture. Se corrigió registrando/liberando su contexto de mundo; se recompiló y repitió la suite completa, sin esos warnings. El arranque final mantiene los 14 `Condition failed` y el warning de layout previamente observados, fuera de los tests; su causa sigue sin diagnosticar. En esta ejecución no apareció el diagnóstico de Concert registrado en la fase anterior. El validador confirma Win64 válido y otros SDKs ausentes/inválidos, incluidos LinuxArm64/VisionOS. Git avisa de conversión futura LF/CRLF. No se validaron PIE ni cook/empaquetado; no se implementó la siguiente fase.
+
+## 18. Cuarta implementación: pickup físico mínimo
+
+Este incremento crea `Interaction/SoulsItemPickup.{h,cpp}` y `Tests/SoulsItemPickupTests.cpp`. `ASoulsItemPickup : AActor` funciona aislado, sin migrar Player/Enemy, sin spawn automático desde muerte y sin nuevos assets, mapas, Blueprints, configuración o dependencias. Health, ItemDefinition, ItemComponent, ItemReward y RewardComponent permanecen intactos.
+
+### Componentes, colisión y visual
+
+El root es un USphereComponent móvil de radio 75, con GenerateOverlapEvents y objeto WorldDynamic. Inicialmente tiene NoCollision; InitializeReward correcto habilita QueryOnly. Responde Overlap a los canales existentes excepto Visibility/Camera, que ignora. No restringe a Pawn ni añade canales personalizados. El candidato también debe tener una primitiva con colisión de consulta, GenerateOverlapEvents y respuestas compatibles para producir un overlap real.
+
+Un UStaticMeshComponent hijo, sin colisión ni overlaps, usa `/Engine/BasicShapes/Sphere.Sphere` a escala 0.4 como marcador visible. Una referencia blanda configurable en defaults se carga en OnConstruction y se retiene mediante el componente; permite visualizar instancias futuras en editor/PIE sin ConstructorHelpers ni assets propios. Si el recurso falta, emite warning y la interacción sigue siendo independiente de la visual. No hay Tick, rotación/bobbing, VFX, SFX ni UI. Cook de esa referencia y apariencia en PIE quedan por validar al autorizar integración.
+
+### Asignación y lifetime
+
+InitializeReward solo acepta una recompensa válida, Available, con RewardId y definición válidos. Acepta una única asignación por instancia; una asignación repetida o inválida no reemplaza ni limpia la anterior. Guarda **exactamente el mismo USoulsItemReward** mediante UPROPERTY TObjectPtr transitorio antes de habilitar la colisión, porque esa habilitación puede generar un overlap síncrono.
+
+La cadena fuerte reflejada es Pickup -> Reward -> ItemDefinition. El pickup no copia definición ni construye una recompensa equivalente; no depende del Source ni de su grant. Al destruirlo sin claim no concede objetos ni cambia Reward. Si otro consumidor retiene la recompensa, sigue Available; sin otros poseedores, recompensa/definición pueden ser recolectadas. No hay persistencia ni recuperación de recompensas perdidas.
+
+### Interacción y target
+
+El callback OnComponentBeginOverlap llama directamente a `TryClaimForActor(Candidate, OutGrantId)`, la misma API C++ usada por tests. No contiene otra regla de adquisición. Se rechazan nullptr, el propio pickup, un Actor inválido/en destrucción y targets sin ItemComponent. Se exige exactamente un ItemComponent válido y no en destrucción del candidato: más de uno devuelve AmbiguousItemComponents, sin elegir arbitrariamente ni conceder parcialmente. Items valida después las capacidades necesarias para los efectos; no hay casts a Character/PlayerController/Boss ni conocimiento de Vitalidad en el pickup.
+
+La operación invoca únicamente Reward.Claim(ItemComponent), que utiliza GrantItem y el lote de efectos existente. Si falla, invalida el output, conserva el pickup sin consumir y mantiene su colisión disponible para un reintento, salvo que un callback haya solicitado explícitamente destruir el Actor. Busy de Reward se propaga como Busy; otros rechazos de Claim se devuelven como ClaimRejected. Una recompensa que fue reclamada externamente se rechaza como AlreadyClaimed: no se reabre ni se duplica, y el pickup no inventa un consumo propio.
+
+### Consumo, reentrada y destrucción
+
+Reward conserva la autoridad Available/Claimed. El pickup solo mantiene bClaiming durante la operación/eventos, bConsumed para el consumo físico confirmado y bEnded para impedir interacción tras teardown. Reentrada devuelve Busy sin un segundo grant. Una instancia consumida o finalizada devuelve Unavailable. Las referencias fuertes locales protegen pickup, recompensa y candidato durante callbacks; no convierten un Actor destruido en un target utilizable.
+
+Solo después de Claim Success se marca bConsumed, se desactiva inmediatamente colisión del Actor/Sphere y GenerateOverlapEvents, se confirma OutGrantId y se publica PickupClaimed (pickup, candidato, GrantId), nativo y después Blueprint. Después se solicita Destroy si no estaba ya en destrucción. Si Destroy es rechazado por el motor, emite warning y queda consumido sin colisión. El guard permanece activo durante los eventos y la solicitud de destrucción.
+
+Destruir el pickup desde un callback anterior no revierte un grant ya confirmado por Reward: se completa el estado consumido y la notificación nativa; se omite el evento Blueprint si el Actor ya finalizó. Destruirlo desde PickupClaimed es seguro y no repite Destroy. Destruir el target durante la concesión antes de confirmarse Claim produce el rechazo existente de Reward, conserva la recompensa Available y no consume el pickup. Una retirada/destrucción posterior a la confirmación sigue siendo una operación posterior, sin devolver la recompensa a Available.
+
+Destroyed/EndPlay deshabilitan interacción sin conceder, generar ni modificar recompensas. La ausencia de presentación o listeners no afecta la concesión. Blueprint solo recibe lectura de Reward/consumo y el evento; InitializeReward y TryClaimForActor permanecen C++.
+
+### Extensión posterior
+
+El spawn automático deberá recibir la recompensa lógica ya generada y asignarla al pickup mediante InitializeReward. Debe conservar esa misma instancia si el spawn falla, sin repetir el sorteo/generación ni marcarla reclamada. Esa coordinación y la integración en Player/Enemy quedan para otra autorización; esta fase solo implementa el Actor aislado.
+
+### Pruebas del pickup
+
+SoulsNew.Pickups contiene 21 Automation Tests: A–N, IntegrationFlow y seis pruebas adicionales de colisión/visual, overlap real, recompensa inválida, asignación única, destrucción del pickup durante callbacks y dos pickups compartiendo una recompensa sin duplicar grants. IntegrationFlow prueba una sola definición transitoria y la misma instancia de Reward en `500 -> 625 -> Death -> Reward -> Pickup -> Claim -> 100 -> 125`.
+
+RealWorldOverlap usa un mundo Game transitorio con escena de física, contexto registrado e inicialización normal de actores/BeginPlay. Spawnea un Actor genérico con Sphere WorldDynamic, ejecuta un frame fijo normal de mundo y mueve el Actor hasta la esfera del pickup. Comprueba registro/estado físico, presencia de geometría en una consulta real y enlace del delegate a la instancia. El evento procede de las consultas/overlaps del motor: no se publica un delegate artificial ni se llama directamente a TryClaimForActor en ese caso. El fixture llama EndPlay y libera mundo/contexto, sin sleeps, GameInstance ni assets de prueba.
+
+Validación final: SoulsNewEditor Win64 Development compilado con UE 5.8.3 mediante UBT/UHT, sin Live Coding, con `-NoPCH -NoUBA -MaxParallelActions=1`; salida 0, sin warnings de compilación. `Automation RunTests SoulsNew.` ejecutado con UnrealEditor-Cmd, `/Engine/Maps/Entry`, `-nullrhi -nosound -unattended`: **15/15 Health, 20/20 Items, 20/20 Rewards y 21/21 Pickups Success; 76 tests, cero fallos/warnings en las suites**, salida 0. RealWorldOverlap e IntegrationFlow pasaron. Evidencia local: `Saved/Logs/PickupsPhase-EditorBuild-Complete.log`, `Saved/Logs/PickupsPhase-Automation-Complete.log` y `Saved/Automation/PickupsPhase-Complete/index.json`. Los hashes de los 864 archivos iniciales de Source/Config/Content y metadatos consultados no muestran modificaciones ni eliminaciones: se conservan los 753 assets/mapas, AGENTS.md y toda la infraestructura previa. Solo se añade el pickup/tests y se actualiza esta documentación.
+
+Durante el desarrollo se corrigieron dos errores de API en tests (TObjectPtr para TestNotNull y consulta de delegate sparse). Las primeras pruebas de mundo no producían overlap al omitir la inicialización de actores; se corrigió el fixture y su cierre EndPlay. Una iteración también llamó BeginPlay dos veces y produjo ensures/warnings de subsistemas; se eliminó esa segunda llamada. Los informes fallidos se conservan en Saved para diagnóstico y la ejecución final no contiene esos errores/warnings. Fuera de las suites permanecen los 14 Condition failed de arranque y el warning de layout históricos, sin diagnóstico nuevo de Concert en esta ejecución. Win64 tiene SDK válido; otros SDKs permanecen ausentes/inválidos, incluidos LinuxArm64/VisionOS. Git advierte conversión futura LF/CRLF. No se validó presentación en PIE ni cook/empaquetado y no se implementó la siguiente fase.
