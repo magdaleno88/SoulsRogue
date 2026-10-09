@@ -2,7 +2,7 @@
 
 Fecha: 8 de octubre de 2026 (America/Mexico_City).
 
-**Estado: arquitectura propuesta con Health/modificadores, objetos universales mínimos, recompensas lógicas y pickup físico mínimo implementados.** Las secciones de inspección describen el baseline original; las secciones 15, 16, 17 y 18 concretan los incrementos autorizados posteriormente. Las demás clases siguen siendo propuestas. No se ha migrado gameplay existente ni modificado assets; este documento no autoriza ejecutar todo el roadmap.
+**Estado: arquitectura propuesta con Health/modificadores, objetos universales mínimos, recompensas lógicas, pickup físico mínimo y spawn automático implementados.** Las secciones de inspección describen el baseline original; las secciones 15–19 concretan los incrementos autorizados posteriormente. Las demás clases siguen siendo propuestas. No se ha migrado gameplay existente ni modificado assets; este documento no autoriza ejecutar todo el roadmap.
 
 ## 1. Alcance y evidencia
 
@@ -128,7 +128,7 @@ Propongo `USoulsItemDefinition : UPrimaryDataAsset` para la definición única. 
 
 ## 5. Responsabilidades y fronteras
 
-Los nombres de esta tabla siguen siendo **propuestos**, excepto `USoulsHealthComponent` y `FSoulsAttributeModifier` (sección 15), `USoulsItemComponent`, `USoulsItemDefinition` y `FSoulsOwnedItem` (sección 16), `USoulsRewardComponent` y `USoulsItemReward` (sección 17), y `ASoulsItemPickup` (sección 18). Las tres clases base de SoulsNew ya existían.
+Los nombres de esta tabla siguen siendo **propuestos**, excepto `USoulsHealthComponent` y `FSoulsAttributeModifier` (sección 15), `USoulsItemComponent`, `USoulsItemDefinition` y `FSoulsOwnedItem` (sección 16), `USoulsRewardComponent` y `USoulsItemReward` (sección 17), `ASoulsItemPickup` (sección 18) y `USoulsRewardDropSpawnerComponent` (sección 19). Las tres clases base de SoulsNew ya existían.
 
 | Elemento | Responsabilidad | Cuándo |
 | --- | --- | --- |
@@ -141,6 +141,7 @@ Los nombres de esta tabla siguen siendo **propuestos**, excepto `USoulsHealthCom
 | `ASoulsItemPickup` | Retener Reward, overlap con Actor compatible, Claim y consumo físico tras éxito | Implementado, aislado |
 | `USoulsRewardComponent` | Escuchar muerte y capturar definición de un grant seleccionado, una vez por ciclo | Implementado, selección explícita |
 | `USoulsItemReward` | RewardId, referencia a definición, Available/Claimed y claim mediante GrantItem | Implementado, recompensa lógica |
+| `USoulsRewardDropSpawnerComponent` | Escuchar RewardGenerated, materializar la misma Reward en un pickup y conservar pendientes para retry explícito | Implementado, Actors genéricos |
 | `ASoulsBossCharacter` | Cuerpo/presentación del boss; compone vida y objetos | Slice, boss inerte |
 | `USoulsCombatEventComponent` | Eventos locales tipados; suscripción por trigger | Después del slice; muerte puede usar delegate de Health inicialmente |
 | `USoulsCombatComponent` | Pipeline de ataques/daño, estado, costes, defensa y ventanas | Incrementos posteriores |
@@ -158,13 +159,14 @@ flowchart LR
     IB --> HB[Health Boss]
     HB -->|Muerte confirmada| R[Recompensa lógica]
     IB -->|Identidades poseídas| R
-    R --> P[Pickup con referencia a Reward]
+    R --> S[Drop Spawner]
+    S --> P[Pickup con referencia a la misma Reward]
     P -->|Claim de Reward y GrantItem validado| IP
     HP --> UI[UI / VFX / SFX]
     HB --> UI
 ```
 
-Dirección de dependencias: Items utiliza contratos de capacidades, atributos y eventos; Health no conoce Vitalidad ni reglas de loot. RewardComponent conoce posesiones y muerte; ItemReward concede mediante Items. Pickup retiene ItemReward y solicita Claim hacia un ItemComponent. Ningún componente depende del widget para funcionar.
+Dirección de dependencias: Items utiliza contratos de capacidades, atributos y eventos; Health no conoce Vitalidad ni reglas de loot. RewardComponent conoce posesiones y muerte; ItemReward concede mediante Items. DropSpawner adapta RewardGenerated al spawn físico; Pickup retiene ItemReward y solicita Claim hacia un ItemComponent. Ningún componente depende del widget para funcionar.
 
 ## 6. Modelo universal de objetos
 
@@ -641,3 +643,52 @@ RealWorldOverlap usa un mundo Game transitorio con escena de física, contexto r
 Validación final: SoulsNewEditor Win64 Development compilado con UE 5.8.3 mediante UBT/UHT, sin Live Coding, con `-NoPCH -NoUBA -MaxParallelActions=1`; salida 0, sin warnings de compilación. `Automation RunTests SoulsNew.` ejecutado con UnrealEditor-Cmd, `/Engine/Maps/Entry`, `-nullrhi -nosound -unattended`: **15/15 Health, 20/20 Items, 20/20 Rewards y 21/21 Pickups Success; 76 tests, cero fallos/warnings en las suites**, salida 0. RealWorldOverlap e IntegrationFlow pasaron. Evidencia local: `Saved/Logs/PickupsPhase-EditorBuild-Complete.log`, `Saved/Logs/PickupsPhase-Automation-Complete.log` y `Saved/Automation/PickupsPhase-Complete/index.json`. Los hashes de los 864 archivos iniciales de Source/Config/Content y metadatos consultados no muestran modificaciones ni eliminaciones: se conservan los 753 assets/mapas, AGENTS.md y toda la infraestructura previa. Solo se añade el pickup/tests y se actualiza esta documentación.
 
 Durante el desarrollo se corrigieron dos errores de API en tests (TObjectPtr para TestNotNull y consulta de delegate sparse). Las primeras pruebas de mundo no producían overlap al omitir la inicialización de actores; se corrigió el fixture y su cierre EndPlay. Una iteración también llamó BeginPlay dos veces y produjo ensures/warnings de subsistemas; se eliminó esa segunda llamada. Los informes fallidos se conservan en Saved para diagnóstico y la ejecución final no contiene esos errores/warnings. Fuera de las suites permanecen los 14 Condition failed de arranque y el warning de layout históricos, sin diagnóstico nuevo de Concert en esta ejecución. Win64 tiene SDK válido; otros SDKs permanecen ausentes/inválidos, incluidos LinuxArm64/VisionOS. Git advierte conversión futura LF/CRLF. No se validó presentación en PIE ni cook/empaquetado y no se implementó la siguiente fase.
+
+## 19. Quinta implementación: spawn automático de recompensas
+
+`Interaction/SoulsRewardDropSpawnerComponent.{h,cpp}` añade un adaptador sin Tick sobre un AActor genérico. USoulsRewardComponent conserva la generación lógica; ASoulsItemPickup conserva la interacción/Claim. El nuevo componente solo coordina `RewardGenerated -> spawn -> InitializeReward(misma Reward)`. No conoce efectos, Vitalidad, Character, Pawn, controladores ni Combat. No añade dependencias/plugins o contenido, ni migra Player/Enemy.
+
+### Suscripción y configuración
+
+OnRegister en mundo Game y BeginPlay llaman RefreshRewardBinding: exige exactamente un USoulsRewardComponent válido y no en destrucción del mismo owner y se suscribe a su delegate nativo mediante AddUObject/FDelegateHandle. Ausencia o ambigüedad devuelve false y retira la suscripción previa. La composición dinámica posterior debe llamar explícitamente RefreshRewardBinding; no hay búsqueda por Tick. Si encuentra una recompensa ya generada, usa la misma operación pública TrySpawnRewardPickup para recuperarla. OnUnregister/EndPlay/OnComponentDestroyed retiran la suscripción; los dos últimos también bloquean operaciones futuras. No se destruye el pickup materializado al terminar el componente.
+
+PickupClass es TSubclassOf<ASoulsItemPickup>, configurable en Details y por C++, con la clase nativa como default. Una variante Blueprint visual futura puede cambiar la presentación sin cambiar recompensa ni concesión. SpawnOffset es un único FVector editable, por defecto (0, 0, 100), en coordenadas locales del owner. Posición = OwnerTransform.TransformPosition(SpawnOffset), incluyendo rotación y escala del owner; rotación = rotación del owner; escala del pickup = (1, 1, 1). Se rechazan transform/offset no finitos. No hay impulso, trace, navegación ni RNG.
+
+### Spawn, identidad y eventos
+
+TrySpawnRewardPickup valida la recompensa y retiene exactamente ese UObject antes de cualquier paso fallible. Utiliza SpawnActorDeferred con AlwaysSpawn y sin Owner/Instigator. Deshabilita colisión del Actor, llama InitializeReward con el mismo puntero y después FinishSpawning. La esfera puede configurarse internamente como QueryOnly mientras la colisión global sigue deshabilitada; no se abre una ventana de interacción normal antes de finalizar construcción. Si falla la inicialización o finalización, destruye el actor parcial y mantiene la recompensa pendiente. Comprueba identidad de Reward después de la construcción.
+
+Después de finalizar se confirma ActivePickup débil y el resultado Success, se activa colisión y se publica PickupSpawned nativo y luego Blueprint. La activación puede causar un overlap síncrono y consumir/destruir el actor antes de la notificación: PickupSpawned confirma la materialización completada, no garantiza que siga sin reclamar al atender el evento. El listener debe consultar Reward.State/IsConsumed antes de usarlo como pickup activo. Referencias fuertes locales protegen componente, recompensa y pickup durante callbacks. Se omite notificación si el componente terminó durante la operación y se omite Blueprint si terminó durante la nativa. El pickup ya materializado sigue siendo independiente del source.
+
+PickupSpawnFailed es nativo y contiene componente, recompensa retenida y razón explícita (World/clase/transform inválidos, spawn o inicialización fallidos). No se publica éxito en esos casos. Rechazos previos a un intento (Busy, AlreadyActive, AlreadyClaimed, InvalidReward, RewardPending, Unavailable) no publican fallos de materialización. Las mutaciones/reintentos son C++ y de game thread; Blueprint recibe configuración, lectura y presentación del éxito.
+
+### Estado, fallos y retry
+
+La máquina de estados es derivada, evitando un enum almacenado que pueda desincronizarse con Claim/Destroy:
+
+| Estado | Invariante observable |
+| --- | --- |
+| Idle | Sin RetainedReward |
+| PendingSpawn | Reward Available retenida, sin pickup válido fuera de destrucción; GetPendingReward devuelve esa instancia |
+| PickupActive | Reward Available y ActivePickup débil válido/no en destrucción; GetPendingReward devuelve nullptr |
+| Completed | Reward Claimed; no pendiente ni pickup utilizable para esta recompensa |
+
+RetainedReward es UPROPERTY fuerte y ActivePickup es UPROPERTY débil. GetPendingReward/GetActivePickup no pueden anunciar ambos estados simultáneamente. La detección de destrucción es a demanda: los getters y TrySpawn comprueban validez débil e IsActorBeingDestroyed; no requieren un delegate nuevo del pickup ni polling. Si se destruye externamente sin Claim, inmediatamente se observa PendingSpawn y TrySpawnPendingReward crea una nueva representación de la misma Reward Available. No se respawnea automáticamente. Si hubo Claim, retry devuelve AlreadyClaimed y nunca recrea la recompensa.
+
+World inexistente/en teardown, clase inválida y otros fallos dejan la misma recompensa retenida/Available. El llamador corrige configuración y llama TrySpawnPendingReward; no se genera una recompensa nueva. Un componente sin owner/World también conserva pendientes sin crash; no se incluye una API para reubicar componentes sin owner en otro Actor. No hay scheduler ni persistencia global: si desaparecen source/spawner y todos los holders antes de materializar, no se garantiza conservar el pendiente a través de GC/cambio de mapa.
+
+El guard bSpawning cubre spawn, activación y ambas notificaciones. Reentrada de RewardGenerated, TrySpawnRewardPickup, retry o configuración devuelve Busy/false; llamadas repetidas después devuelven AlreadyActive. Una Reward Available pendiente/activa bloquea reemplazarla por otra (RewardPending). Una nueva recompensa puede aceptarse cuando la anterior está Claimed, siguiendo el Rearm explícito existente. La garantía de máximo un pickup activo por recompensa es local a esta instancia de spawner; no se introduce un registro global entre spawners independientes. Al componer un source se usa un único adaptador de drops.
+
+### Lifetime y extensión a un boss real
+
+Source contiene RewardComponent y DropSpawner. Ambos pueden retener Reward, pero ninguno es necesario para que el pickup ya creado sobreviva: `World -> Pickup -> Reward -> ItemDefinition`. Pickup no referencia Source, y el spawner solo observa Pickup débilmente. Destruir source y recolectarlo con GC deja Reward/Definition vivas mientras exista Pickup; un target genérico puede reclamar después. Destruir un pickup sin reclamar conserva el pendiente mientras el spawner u otro holder siga existiendo. Un claim confirmado nunca se revierte por destruir source/pickup.
+
+Un futuro boss real compondrá Health, Items, RewardComponent y este adaptador, seleccionará explícitamente el grant recompensable y configurará clase/offset antes de morir. El mismo mecanismo admite una variante visual de pickup sin tocar RewardComponent. Recompensa directa, cofre o pantalla de selección podrán usar otros adaptadores del mismo evento. Esa integración, assets y selección de tres objetos permanecen pendientes de autorización.
+
+### Validación del incremento
+
+SoulsNew.DropSpawner añade 23 Automation Tests: A–P y siete casos adicionales de World inexistente, fallo/limpieza de InitializeReward, fallo durante finalización del spawn con retry, destrucción del source/pickup en callbacks, overlap inmediato al activar colisión y nueva vida/rechazo de reemplazar una recompensa Available. EndToEndPhysical usa un mundo Game transitorio inicializado con física y Actors genéricos: fuente 500 -> grant 625 -> Death -> RewardGenerated -> spawn automático -> movimiento/overlap real -> Claim -> target 100 -> 125, misma Reward/Definition y consumo. No llama directamente a TryClaimForActor ni fabrica delegates de overlap. ImmediateOverlapOnActivation verifica el caso de un target ya dentro del volumen al materializarse.
+
+Validación final: SoulsNewEditor Win64 Development con UE 5.8.3, UBT/UHT y compilación nativa sin Live Coding, `-NoPCH -NoUBA -MaxParallelActions=1`; salida 0, sin warnings de compilación. `Automation RunTests SoulsNew.` con UnrealEditor-Cmd, `/Engine/Maps/Entry`, `-nullrhi -nosound -unattended`: **15/15 Health, 20/20 Items, 20/20 Rewards, 21/21 Pickups y 23/23 DropSpawner Success; 99/99, cero fallos/warnings en las suites**, salida 0. Evidencia: `Saved/Logs/DropSpawnerPhase-EditorBuild-Validated.log`, `Saved/Logs/DropSpawnerPhase-Automation-Validated.log` y `Saved/Automation/DropSpawnerPhase-Validated/index.json`. Los hashes de los 867 archivos iniciales consultados de Source/Config/Content y metadatos no muestran modificaciones ni eliminaciones; los 753 assets/mapas y la infraestructura previa se conservaron. Solo se añaden tres archivos de componente/tests y se actualiza este documento.
+
+La primera ejecución conservó los 76 tests anteriores pero falló dos comprobaciones nuevas del fixture: OnActorSpawned llega después de FinishSpawning (se utiliza OnActorPreSpawnInitialization para provocar una asignación que haga fallar InitializeReward); un pickup consumido inmediatamente ya pasó por EndPlay y HasActorBegunPlay deja de ser true (se comprueba IsActorInitialized). Se corrigieron, recompiló y ejecutó la suite completa con los dos casos adicionales, dando el resultado final anterior; se conservan los informes iniciales. Fuera de las suites permanecen los 14 errores genéricos Condition failed de arranque y el warning de layout históricos, sin nuevos warnings de este incremento ni diagnóstico Concert en esta ejecución. Win64 tiene SDK válido; otros SDKs, incluidos LinuxArm64/VisionOS, siguen ausentes/inválidos. Git avisa de conversión futura LF/CRLF. No se validó presentación en PIE ni cook/empaquetado; no se implementó integración de Player/Boss ni la fase siguiente.
