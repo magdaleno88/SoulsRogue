@@ -10,6 +10,8 @@
 class USpringArmComponent;
 class UCameraComponent;
 class UInputAction;
+class USoulsHealthComponent;
+class USoulsItemComponent;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -19,7 +21,7 @@ DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
  *  Implements a controllable orbiting camera
  */
 UCLASS(abstract)
-class ASoulsNewCharacter : public ACharacter
+class SOULSNEW_API ASoulsNewCharacter : public ACharacter
 {
 	GENERATED_BODY()
 
@@ -30,6 +32,12 @@ class ASoulsNewCharacter : public ACharacter
 	/** Follow camera */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FollowCamera;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="SoulsNew", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<USoulsHealthComponent> SoulsHealth;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="SoulsNew", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<USoulsItemComponent> SoulsItems;
 	
 protected:
 
@@ -55,6 +63,9 @@ public:
 	ASoulsNewCharacter();	
 
 protected:
+
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	/** Initialize input action bindings */
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
@@ -92,5 +103,14 @@ public:
 
 	/** Returns FollowCamera subobject **/
 	FORCEINLINE class UCameraComponent* GetFollowCamera() const { return FollowCamera; }
+
+	USoulsHealthComponent* GetSoulsHealth() const { return SoulsHealth; }
+	USoulsItemComponent* GetSoulsItems() const { return SoulsItems; }
+
+private:
+#if !UE_BUILD_SHIPPING
+	FDelegateHandle PrototypeGrantLogHandle;
+	void LogPrototypeItemGrant(USoulsItemComponent* Items, FGuid GrantId, FName ItemId);
+#endif
 };
 
