@@ -12,6 +12,7 @@ class UCameraComponent;
 class UInputAction;
 class USoulsHealthComponent;
 class USoulsItemComponent;
+class USoulsMeleeCombatComponent;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -38,6 +39,9 @@ class SOULSNEW_API ASoulsNewCharacter : public ACharacter
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="SoulsNew", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<USoulsItemComponent> SoulsItems;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="SoulsNew", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<USoulsMeleeCombatComponent> SoulsMeleeCombat;
 	
 protected:
 
@@ -56,6 +60,9 @@ protected:
 	/** Mouse Look Input Action */
 	UPROPERTY(EditAnywhere, Category="Input")
 	UInputAction* MouseLookAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
+	TObjectPtr<UInputAction> LightAttackAction;
 
 public:
 
@@ -96,6 +103,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoJumpEnd();
 
+	/** Input/UI route only; the component validates and executes the attack. */
+	UFUNCTION(BlueprintCallable, Category="Input")
+	void DoLightAttack();
+
 public:
 
 	/** Returns CameraBoom subobject **/
@@ -106,6 +117,8 @@ public:
 
 	USoulsHealthComponent* GetSoulsHealth() const { return SoulsHealth; }
 	USoulsItemComponent* GetSoulsItems() const { return SoulsItems; }
+	USoulsMeleeCombatComponent* GetSoulsMeleeCombat() const { return SoulsMeleeCombat; }
+	UInputAction* GetLightAttackAction() const { return LightAttackAction; }
 
 private:
 #if !UE_BUILD_SHIPPING

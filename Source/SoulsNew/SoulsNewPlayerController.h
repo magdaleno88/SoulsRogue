@@ -17,8 +17,15 @@ UCLASS(abstract)
 class ASoulsNewPlayerController : public APlayerController
 {
 	GENERATED_BODY()
+
+public:
+	ASoulsNewPlayerController();
+	UInputMappingContext* GetSoulsCombatMappingContext() const { return SoulsCombatMappingContext; }
 	
 protected:
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input|Input Mappings")
+	TObjectPtr<UInputMappingContext> SoulsCombatMappingContext;
 
 	/** Input Mapping Contexts */
 	UPROPERTY(EditAnywhere, Category ="Input|Input Mappings")

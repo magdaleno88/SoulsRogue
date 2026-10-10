@@ -3,6 +3,9 @@
 #include "SoulsNewCharacter.h"
 #include "Attributes/SoulsHealthComponent.h"
 #include "Items/SoulsItemComponent.h"
+#include "Combat/SoulsMeleeCombatComponent.h"
+#include "InputAction.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Engine/LocalPlayer.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -18,6 +21,9 @@ ASoulsNewCharacter::ASoulsNewCharacter()
 {
 	SoulsHealth = CreateDefaultSubobject<USoulsHealthComponent>(TEXT("SoulsHealth"));
 	SoulsItems = CreateDefaultSubobject<USoulsItemComponent>(TEXT("SoulsItems"));
+	SoulsMeleeCombat = CreateDefaultSubobject<USoulsMeleeCombatComponent>(TEXT("SoulsMeleeCombat"));
+	static ConstructorHelpers::FObjectFinder<UInputAction> AttackInput(TEXT("/Game/SoulsNew/Input/IA_LightAttack.IA_LightAttack"));
+	LightAttackAction = AttackInput.Object;
 	// Health's existing default is 100; inherited Blueprint defaults have no override for these new subobjects.
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
@@ -87,6 +93,11 @@ void ASoulsNewCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
 		
 		// Jumping
+		if (LightAttackAction)
+		{
+			EnhancedInputComponent->BindAction(LightAttackAction, ETriggerEvent::Started, this, &ASoulsNewCharacter::DoLightAttack);
+		}
+
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 
@@ -110,6 +121,11 @@ void ASoulsNewCharacter::Move(const FInputActionValue& Value)
 
 	// route the input
 	DoMove(MovementVector.X, MovementVector.Y);
+}
+
+void ASoulsNewCharacter::DoLightAttack()
+{
+	SoulsMeleeCombat->TryLightAttack();
 }
 
 void ASoulsNewCharacter::Look(const FInputActionValue& Value)

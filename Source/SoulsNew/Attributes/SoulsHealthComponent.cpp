@@ -178,7 +178,15 @@ void USoulsHealthComponent::ApplyMaxHealthPreservingPercentage(float NewMaxHealt
 
 float USoulsHealthComponent::TakeDamage(float Amount)
 {
+	FSoulsDamageContext Context;
+	Context.DamageAmount = Amount;
+	return ApplyDamage(Context);
+}
+
+float USoulsHealthComponent::ApplyDamage(const FSoulsDamageContext& Context)
+{
 	check(IsInGameThread());
+	const float Amount = Context.DamageAmount;
 	if (bBroadcastingChanges || bIsDead || !FMath::IsFinite(Amount) || Amount <= 0.0f)
 	{
 		return 0.0f;
@@ -186,7 +194,9 @@ float USoulsHealthComponent::TakeDamage(float Amount)
 
 	const float NewCurrentHealth = static_cast<float>(FMath::Max(0.0, static_cast<double>(CurrentHealth) - Amount));
 	const float ActualDamage = CurrentHealth - NewCurrentHealth;
-	CommitHealthValues(MaxHealth, NewCurrentHealth);
+	// Snapshot before any observer runs, including HealthChanged observers.
+	const FSoulsDamageContext ConfirmedContext = Context;
+	CommitHealthValues(MaxHealth, NewCurrentHealth, false, &ConfirmedContext);
 	return ActualDamage;
 }
 
@@ -216,7 +226,8 @@ bool USoulsHealthComponent::ResetHealthForNewLife()
 	return true;
 }
 
-void USoulsHealthComponent::CommitHealthValues(float NewMaxHealth, float NewCurrentHealth, bool bNewLife)
+void USoulsHealthComponent::CommitHealthValues(float NewMaxHealth, float NewCurrentHealth, bool bNewLife,
+	const FSoulsDamageContext* DamageContext)
 {
 	const float OldMaxHealth = MaxHealth;
 	const float OldCurrentHealth = CurrentHealth;
@@ -240,6 +251,11 @@ void USoulsHealthComponent::CommitHealthValues(float NewMaxHealth, float NewCurr
 	{
 		HealthChangedEvent.Broadcast(this, OldCurrentHealth, CurrentHealth);
 		OnHealthChanged.Broadcast(this, OldCurrentHealth, CurrentHealth);
+	}
+	if (DamageContext && OldCurrentHealth > CurrentHealth)
+	{
+		DamageReceivedEvent.Broadcast(this, *DamageContext, OldCurrentHealth - CurrentHealth, CurrentHealth);
+		OnDamageReceived.Broadcast(this, *DamageContext, OldCurrentHealth - CurrentHealth, CurrentHealth);
 	}
 	if (bDiedNow)
 	{

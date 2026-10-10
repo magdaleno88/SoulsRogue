@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Attributes/SoulsAttributeModifier.h"
+#include "Combat/SoulsDamageContext.h"
 #include "SoulsHealthComponent.generated.h"
 
 class USoulsHealthComponent;
@@ -14,6 +15,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSoulsDeath, USoulsHealthComponent*,
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FSoulsHealthChangedNative, USoulsHealthComponent*, float, float);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FSoulsMaxHealthChangedNative, USoulsHealthComponent*, float, float);
 DECLARE_MULTICAST_DELEGATE_OneParam(FSoulsDeathNative, USoulsHealthComponent*);
+DECLARE_MULTICAST_DELEGATE_FourParams(FSoulsDamageReceivedNative, USoulsHealthComponent*, const FSoulsDamageContext&, float, float);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FSoulsDamageReceived, USoulsHealthComponent*, HealthComponent, const FSoulsDamageContext&, Context, float, DamageApplied, float, ResultingHealth);
 
 /**
  * Owner-agnostic health. No UI, items, Character casts, Tick or Unreal Damage System dependency.
@@ -44,6 +47,15 @@ public:
 	/** Returns actual health lost. Negative/non-finite requests, dead state and reentry are no-ops. */
 	UFUNCTION(BlueprintCallable, Category="SoulsNew|Health")
 	float TakeDamage(float Amount);
+
+	/** Same health authority as TakeDamage. Returns actual loss, with confirmed context notification. */
+	UFUNCTION(BlueprintCallable, Category="SoulsNew|Health")
+	float ApplyDamage(const FSoulsDamageContext& Context);
+
+	UPROPERTY(BlueprintAssignable, Category="SoulsNew|Health")
+	FSoulsDamageReceived OnDamageReceived;
+
+	FSoulsDamageReceivedNative& DamageReceived() { return DamageReceivedEvent; }
 
 	/** Returns actual health restored; does not resurrect a dead entity. */
 	UFUNCTION(BlueprintCallable, Category="SoulsNew|Health")
@@ -105,9 +117,11 @@ private:
 	FSoulsHealthChangedNative HealthChangedEvent;
 	FSoulsMaxHealthChangedNative MaxHealthChangedEvent;
 	FSoulsDeathNative DeathEvent;
+	FSoulsDamageReceivedNative DamageReceivedEvent;
 
 	static bool IsValidModifier(const FSoulsAttributeModifier& Modifier);
 	static bool TryCalculateMaxHealth(float Base, TConstArrayView<FSoulsAttributeModifier> Modifiers, float& OutMaxHealth);
 	void ApplyMaxHealthPreservingPercentage(float NewMaxHealth);
-	void CommitHealthValues(float NewMaxHealth, float NewCurrentHealth, bool bNewLife = false);
+	void CommitHealthValues(float NewMaxHealth, float NewCurrentHealth, bool bNewLife = false,
+		const FSoulsDamageContext* DamageContext = nullptr);
 };

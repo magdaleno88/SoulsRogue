@@ -5,9 +5,16 @@
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
 #include "InputMappingContext.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Blueprint/UserWidget.h"
 #include "SoulsNew.h"
 #include "Widgets/Input/SVirtualJoystick.h"
+
+ASoulsNewPlayerController::ASoulsNewPlayerController()
+{
+	static ConstructorHelpers::FObjectFinder<UInputMappingContext> CombatInput(TEXT("/Game/SoulsNew/Input/IMC_SoulsCombat.IMC_SoulsCombat"));
+	SoulsCombatMappingContext = CombatInput.Object;
+}
 
 void ASoulsNewPlayerController::BeginPlay()
 {
@@ -43,6 +50,7 @@ void ASoulsNewPlayerController::SetupInputComponent()
 		// Add Input Mapping Contexts
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
 		{
+			if (SoulsCombatMappingContext) { Subsystem->AddMappingContext(SoulsCombatMappingContext, 0); }
 			for (UInputMappingContext* CurrentContext : DefaultMappingContexts)
 			{
 				Subsystem->AddMappingContext(CurrentContext, 0);
