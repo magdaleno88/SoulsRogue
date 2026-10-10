@@ -10,6 +10,7 @@
 class USpringArmComponent;
 class UCameraComponent;
 class UInputAction;
+class UAnimMontage;
 class USoulsHealthComponent;
 class USoulsItemComponent;
 class USoulsMeleeCombatComponent;
@@ -63,6 +64,10 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
 	TObjectPtr<UInputAction> LightAttackAction;
+
+	/** Native player content default; the reusable component may override its own montage. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="SoulsNew|Animation")
+	TObjectPtr<UAnimMontage> DefaultLightAttackMontage;
 
 public:
 

@@ -11,61 +11,7 @@
 #include "Misc/AutomationTest.h"
 #include "SoulsNewCharacter.h"
 
-namespace SoulsMeleeTests
-{
-	constexpr EAutomationTestFlags Flags = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
-	struct FFixture
-	{
-		UWorld* World;
-		FFixture()
-		{
-			const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false).CreatePhysicsScene(true)
-				.CreateNavigation(false).CreateAISystem(false).ShouldSimulatePhysics(true).SetTransactional(false);
-			World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Values);
-			GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
-			World->InitializeActorsForPlay(FURL()); World->BeginPlay(); World->GetWorldSettings()->NotifyBeginPlay();
-		}
-		~FFixture()
-		{
-			World->EndPlay(EEndPlayReason::Quit); World->DestroyWorld(false); GEngine->DestroyWorldContext(World);
-		}
-		AActor* Actor(FVector Location = FVector::ZeroVector)
-		{
-			FActorSpawnParameters P; P.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-			return World->SpawnActor<AActor>(AActor::StaticClass(), Location, FRotator::ZeroRotator, P);
-		}
-		USphereComponent* Collision(AActor* Actor, FName Name = TEXT("Body"), FVector Offset = FVector::ZeroVector)
-		{
-			auto* C = NewObject<USphereComponent>(Actor, Name);
-			Actor->AddInstanceComponent(C);
-			C->SetSphereRadius(20); C->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-			C->SetCollisionObjectType(ECC_WorldDynamic); C->SetCollisionResponseToAllChannels(ECR_Block);
-			if (Actor->GetRootComponent()) { C->SetupAttachment(Actor->GetRootComponent()); C->SetRelativeLocation(Offset); }
-			else { Actor->SetRootComponent(C); C->SetWorldLocation(Actor->GetActorLocation()); }
-			C->RegisterComponent(); return C;
-		}
-		USoulsHealthComponent* Health(AActor* Actor, float Base = 300)
-		{
-			auto* H = NewObject<USoulsHealthComponent>(Actor);
-			Actor->AddInstanceComponent(H); H->RegisterComponent(); H->SetBaseMaxHealth(Base); return H;
-		}
-		AActor* Target(FVector Location = FVector(150, 0, 0))
-		{
-			auto* A = Actor(); Collision(A); A->SetActorLocation(Location); Health(A); return A;
-		}
-		USoulsMeleeCombatComponent* Combat(AActor* Actor)
-		{
-			auto* C = NewObject<USoulsMeleeCombatComponent>(Actor); Actor->AddInstanceComponent(C); C->RegisterComponent(); return C;
-		}
-		ASoulsNewCharacter* Player()
-		{
-			FActorSpawnParameters P; P.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-			auto* Class = LoadClass<ASoulsNewCharacter>(nullptr, TEXT("/Game/ThirdPerson/Blueprints/BP_ThirdPersonCharacter.BP_ThirdPersonCharacter_C"));
-			return World->SpawnActor<ASoulsNewCharacter>(Class, FVector::ZeroVector, FRotator::ZeroRotator, P);
-		}
-		void Advance(float Seconds = 0.56f) { World->Tick(LEVELTICK_All, Seconds); }
-	};
-}
+#include "Tests/SoulsMeleeTestFixture.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsPlayerCombat, "SoulsNew.Melee.F.PlayerHasCombatComponent", SoulsMeleeTests::Flags)
 bool FSoulsPlayerCombat::RunTest(const FString&)
@@ -82,7 +28,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsFrontTarget, "SoulsNew.Melee.G.TargetInFr
 bool FSoulsFrontTarget::RunTest(const FString&)
 {
 	SoulsMeleeTests::FFixture F; auto* P = F.Player(); auto* T = F.Target();
-	TestTrue(TEXT("Attack admitted"), P->GetSoulsMeleeCombat()->TryLightAttack());
+	TestTrue(TEXT("Attack admitted"), F.Attack(P->GetSoulsMeleeCombat()));
 	TestEqual(TEXT("Front loses exactly 100"), T->FindComponentByClass<USoulsHealthComponent>()->GetCurrentHealth(), 200.0f);
 	return true;
 }
@@ -97,7 +43,7 @@ bool FSoulsBossAttack::RunTest(const FString&)
 	B->SetPrototypeItemDefinition(LoadObject<USoulsItemDefinition>(nullptr, TEXT("/Game/SoulsNew/Items/DA_Item_Vitality.DA_Item_Vitality")));
 	B->FinishSpawning(FTransform(FVector(175, 0, 0)));
 	TestEqual(TEXT("Boss starts 625"), B->GetSoulsHealth()->GetCurrentHealth(), 625.0f);
-	TestTrue(TEXT("Same input API"), P->GetSoulsMeleeCombat()->TryLightAttack());
+	TestTrue(TEXT("Same input API"), F.Attack(P->GetSoulsMeleeCombat()));
 	TestEqual(TEXT("625 -> 525"), B->GetSoulsHealth()->GetCurrentHealth(), 525.0f);
 	return true;
 }
@@ -106,7 +52,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsAttackMiss, "SoulsNew.Melee.I.Miss", Soul
 bool FSoulsAttackMiss::RunTest(const FString&)
 {
 	SoulsMeleeTests::FFixture F; auto* T = F.Target(FVector(1000, 0, 0));
-	TestTrue(TEXT("Miss still admitted"), F.Combat(F.Actor())->TryLightAttack());
+	TestTrue(TEXT("Miss still admitted"), F.Attack(F.Combat(F.Actor())));
 	TestEqual(TEXT("Out of range intact"), T->FindComponentByClass<USoulsHealthComponent>()->GetCurrentHealth(), 300.0f);
 	return true;
 }
@@ -115,7 +61,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsBehindTarget, "SoulsNew.Melee.J.TargetBeh
 bool FSoulsBehindTarget::RunTest(const FString&)
 {
 	SoulsMeleeTests::FFixture F; auto* T = F.Target(FVector(-150, 0, 0));
-	F.Combat(F.Actor())->TryLightAttack();
+	F.Attack(F.Combat(F.Actor()));
 	TestEqual(TEXT("Behind intact"), T->FindComponentByClass<USoulsHealthComponent>()->GetCurrentHealth(), 300.0f);
 	return true;
 }
@@ -124,7 +70,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsAttackSelf, "SoulsNew.Melee.K.SelfIgnored
 bool FSoulsAttackSelf::RunTest(const FString&)
 {
 	SoulsMeleeTests::FFixture F; auto* P = F.Player();
-	P->GetSoulsMeleeCombat()->TryLightAttack();
+	F.Attack(P->GetSoulsMeleeCombat());
 	TestEqual(TEXT("Player intact"), P->GetSoulsHealth()->GetCurrentHealth(), 100.0f);
 	return true;
 }
@@ -139,7 +85,7 @@ bool FSoulsDuplicateHit::RunTest(const FString&)
 	TestTrue(TEXT("Physics actually reports multiple components"), Hits.Num() >= 2);
 	int32 Events = 0; auto* H = T->FindComponentByClass<USoulsHealthComponent>();
 	H->DamageReceived().AddLambda([&](USoulsHealthComponent*, const FSoulsDamageContext&, float, float) { ++Events; });
-	F.Combat(F.Actor())->TryLightAttack();
+	F.Attack(F.Combat(F.Actor()));
 	TestEqual(TEXT("Only one application"), Events, 1);
 	TestEqual(TEXT("Only 100 lost"), H->GetCurrentHealth(), 200.0f);
 	return true;
@@ -152,7 +98,7 @@ bool FSoulsGenericAttack::RunTest(const FString&)
 	FSoulsDamageContext Observed; auto* H = T->FindComponentByClass<USoulsHealthComponent>();
 	H->DamageReceived().AddLambda([&](USoulsHealthComponent*, const FSoulsDamageContext& C, float, float) { Observed = C; });
 	TestTrue(TEXT("Both plain AActor"), A->GetClass() == AActor::StaticClass() && T->GetClass() == AActor::StaticClass());
-	TestTrue(TEXT("No attacker health required"), F.Combat(A)->TryLightAttack());
+	TestTrue(TEXT("No attacker health required"), F.Attack(F.Combat(A)));
 	TestEqual(TEXT("Generic target damaged"), H->GetCurrentHealth(), 200.0f);
 	TestTrue(TEXT("Source propagated"), Observed.SourceActor == A);
 	TestEqual(TEXT("Light ID"), Observed.AttackId, FName(TEXT("Attack.Light")));
@@ -164,8 +110,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsAttackCooldown, "SoulsNew.Melee.N.Cooldow
 bool FSoulsAttackCooldown::RunTest(const FString&)
 {
 	SoulsMeleeTests::FFixture F; auto* C = F.Combat(F.Actor()); auto* T = F.Target();
-	TestTrue(TEXT("First admitted"), C->TryLightAttack());
-	TestFalse(TEXT("Immediate rejected"), C->TryLightAttack());
+	TestTrue(TEXT("First admitted"), F.Attack(C));
+	TestFalse(TEXT("Immediate rejected"), F.Attack(C));
 	TestEqual(TEXT("No additional damage"), T->FindComponentByClass<USoulsHealthComponent>()->GetCurrentHealth(), 200.0f);
 	return true;
 }
@@ -174,9 +120,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsCooldownExpires, "SoulsNew.Melee.O.Cooldo
 bool FSoulsCooldownExpires::RunTest(const FString&)
 {
 	SoulsMeleeTests::FFixture F; auto* C = F.Combat(F.Actor()); auto* T = F.Target();
-	C->TryLightAttack(); F.Advance(0.25f);
-	TestFalse(TEXT("Before expiry"), C->TryLightAttack()); F.Advance(0.31f);
-	TestTrue(TEXT("Deterministic world time expires cooldown"), C->TryLightAttack());
+	F.Attack(C); F.Advance(0.25f);
+	TestFalse(TEXT("Before expiry"), F.Attack(C)); F.Advance(0.31f);
+	TestTrue(TEXT("Deterministic world time expires cooldown"), F.Attack(C));
 	TestEqual(TEXT("Two hits"), T->FindComponentByClass<USoulsHealthComponent>()->GetCurrentHealth(), 100.0f);
 	return true;
 }
@@ -186,7 +132,7 @@ bool FSoulsDeadAttacker::RunTest(const FString&)
 {
 	SoulsMeleeTests::FFixture F; auto* A = F.Actor(); auto* H = F.Health(A); auto* T = F.Target();
 	H->TakeDamage(300);
-	TestFalse(TEXT("Dead attacker rejected"), F.Combat(A)->TryLightAttack());
+	TestFalse(TEXT("Dead attacker rejected"), F.Attack(F.Combat(A)));
 	TestEqual(TEXT("Target intact"), T->FindComponentByClass<USoulsHealthComponent>()->GetCurrentHealth(), 300.0f);
 	return true;
 }
@@ -198,7 +144,7 @@ bool FSoulsDeadTarget::RunTest(const FString&)
 	int32 Deaths = 0, Events = 0;
 	H->Death().AddLambda([&](USoulsHealthComponent*) { ++Deaths; }); H->TakeDamage(300);
 	H->DamageReceived().AddLambda([&](USoulsHealthComponent*, const FSoulsDamageContext&, float, float) { ++Events; });
-	F.Combat(F.Actor())->TryLightAttack();
+	F.Attack(F.Combat(F.Actor()));
 	TestEqual(TEXT("Still zero"), H->GetCurrentHealth(), 0.0f);
 	TestEqual(TEXT("No new death"), Deaths, 1); TestEqual(TEXT("No damage event"), Events, 0);
 	return true;
@@ -208,7 +154,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSoulsAmbiguousTarget, "SoulsNew.Melee.V.Ambigu
 bool FSoulsAmbiguousTarget::RunTest(const FString&)
 {
 	SoulsMeleeTests::FFixture F; auto* T = F.Target(); auto* First = T->FindComponentByClass<USoulsHealthComponent>(); auto* Second = F.Health(T);
-	F.Combat(F.Actor())->TryLightAttack();
+	F.Attack(F.Combat(F.Actor()));
 	TestEqual(TEXT("First intact"), First->GetCurrentHealth(), 300.0f); TestEqual(TEXT("Second intact"), Second->GetCurrentHealth(), 300.0f);
 	return true;
 }
@@ -221,7 +167,7 @@ bool FSoulsMultiTarget::RunTest(const FString&)
 	auto* HA = A->FindComponentByClass<USoulsHealthComponent>(); auto* HB = B->FindComponentByClass<USoulsHealthComponent>();
 	HA->DamageReceived().AddLambda([&](USoulsHealthComponent*, const FSoulsDamageContext& C, float, float) { IdA = C.AttackInstanceId; Order.Add(A->GetPathName()); });
 	HB->DamageReceived().AddLambda([&](USoulsHealthComponent*, const FSoulsDamageContext& C, float, float) { IdB = C.AttackInstanceId; Order.Add(B->GetPathName()); });
-	F.Combat(F.Actor())->TryLightAttack();
+	F.Attack(F.Combat(F.Actor()));
 	TestEqual(TEXT("A damaged"), HA->GetCurrentHealth(), 200.0f); TestEqual(TEXT("B damaged"), HB->GetCurrentHealth(), 200.0f);
 	TestTrue(TEXT("One valid shared causal ID"), IdA.IsValid() && IdA == IdB);
 	if (TestEqual(TEXT("Two observers"), Order.Num(), 2)) { TestTrue(TEXT("Ordinal target order"), Order[0].Compare(Order[1], ESearchCase::CaseSensitive) < 0); }
@@ -233,7 +179,7 @@ bool FSoulsAttackReentry::RunTest(const FString&)
 {
 	SoulsMeleeTests::FFixture F; auto* C = F.Combat(F.Actor()); auto* T = F.Target();
 	T->FindComponentByClass<USoulsHealthComponent>()->DamageReceived().AddLambda([&](USoulsHealthComponent*, const FSoulsDamageContext&, float, float) { TestFalse(TEXT("Recursive attack rejected"), C->TryLightAttack()); });
-	TestTrue(TEXT("Outer admitted"), C->TryLightAttack());
+	TestTrue(TEXT("Outer admitted"), F.Attack(C));
 	TestEqual(TEXT("Only outer damage"), T->FindComponentByClass<USoulsHealthComponent>()->GetCurrentHealth(), 200.0f);
 	return true;
 }

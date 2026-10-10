@@ -4,7 +4,22 @@
 #include "Components/ActorComponent.h"
 #include "SoulsMeleeCombatComponent.generated.h"
 
-/** Instant prototype sweep. No animation, stamina, equipment or owner-class assumptions. */
+class UAnimMontage;
+class UAnimInstance;
+class UAnimSequenceBase;
+class USkeletalMeshComponent;
+class USoulsHealthComponent;
+
+UENUM(BlueprintType)
+enum class ESoulsMeleeState : uint8
+{
+	Idle,
+	Windup,
+	Active,
+	Recovery
+};
+
+/** Montage-driven prototype attack. The notify supplies timing; this component owns damage/state. */
 UCLASS(ClassGroup=(SoulsNew), meta=(BlueprintSpawnableComponent))
 class SOULSNEW_API USoulsMeleeCombatComponent : public UActorComponent
 {
@@ -12,16 +27,50 @@ class SOULSNEW_API USoulsMeleeCombatComponent : public UActorComponent
 public:
 	USoulsMeleeCombatComponent();
 
-	/** True means an attack was admitted, including a miss. False means gating/configuration rejected it. */
+	/** Starts a montage in Windup; never applies damage at input time. */
 	UFUNCTION(BlueprintCallable, Category="SoulsNew|Combat")
 	bool TryLightAttack();
+
+	UFUNCTION(BlueprintPure, Category="SoulsNew|Combat")
+	ESoulsMeleeState GetCombatState() const { return CombatState; }
+
+	UFUNCTION(BlueprintPure, Category="SoulsNew|Combat")
+	bool IsAttackWindowOpen() const { return CombatState == ESoulsMeleeState::Active; }
+
+	UFUNCTION(BlueprintCallable, Category="SoulsNew|Combat")
+	void CancelCurrentAttack();
+
+	/** Configuration can only change while Idle. Null explicitly disables the attack. */
+	bool SetLightAttackMontage(UAnimMontage* Montage);
+	UAnimMontage* GetLightAttackMontage() const { return LightAttackMontage; }
+	FGuid GetActiveAttackId() const { return ActiveAttackId; }
+	int32 GetAttackMontageInstanceId() const { return AttackMontageInstanceId; }
+
+	/** Notify requests carry the exact mesh, asset and montage execution ID; stale requests are rejected. */
+	bool BeginAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId);
+	bool ProcessAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId);
+	bool EndAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId);
 
 	float GetLightAttackDamage() const { return LightAttackDamage; }
 	float GetLightAttackRange() const { return LightAttackRange; }
 	float GetTraceRadius() const { return TraceRadius; }
 	float GetLightAttackCooldown() const { return LightAttackCooldown; }
 
+protected:
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void OnUnregister() override;
+
 private:
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="SoulsNew|Combat", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UAnimMontage> LightAttackMontage;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="SoulsNew|Combat", meta=(AllowPrivateAccess="true"))
+	ESoulsMeleeState CombatState = ESoulsMeleeState::Idle;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimMontage> ActiveMontage;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="SoulsNew|Combat", meta=(AllowPrivateAccess="true", ClampMin="0.001"))
 	float LightAttackDamage = 100.0f;
 
@@ -40,5 +89,22 @@ private:
 	bool bDrawDebugSweep = false;
 
 	double NextLightAttackTime = 0.0;
-	bool bExecutingAttack = false;
+	bool bStartingAttack = false;
+	bool bProcessingWindow = false;
+	bool bWindowOpened = false;
+	bool bChangedRootMotionMode = false;
+	uint8 PreviousRootMotionMode = 0;
+	int32 AttackMontageInstanceId = INDEX_NONE;
+	FGuid ActiveAttackId;
+	TWeakObjectPtr<USkeletalMeshComponent> ActiveMesh;
+	TWeakObjectPtr<UAnimInstance> ActiveAnimInstance;
+	TWeakObjectPtr<USoulsHealthComponent> ObservedHealth;
+	FDelegateHandle DeathHandle;
+	TSet<TWeakObjectPtr<AActor>> HitActors;
+
+	bool MatchesExecution(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId) const;
+	void FinishCurrentAttack(const FGuid& ExpectedAttackId);
+	void OnMontageBlendingOut(UAnimMontage* Montage, bool bInterrupted, FGuid ExpectedAttackId);
+	void OnMontageEnded(UAnimMontage* Montage, bool bInterrupted, FGuid ExpectedAttackId);
+	void OnOwnerDeath(USoulsHealthComponent* Health);
 };

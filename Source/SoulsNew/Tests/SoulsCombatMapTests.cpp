@@ -28,6 +28,10 @@ namespace SoulsCombatMapTests
 	{
 	public:
 		FAttackMapCommand(FAutomationTestBase* InTest, bool bInKill) : Test(InTest), bKill(bInKill) {}
+		~FAttackMapCommand()
+		{
+			if (Boss.IsValid()) { Boss->GetSoulsHealth()->DamageReceived().Remove(DamageHandle); }
+		}
 		virtual bool Update() override
 		{
 			if (FPlatformTime::Seconds() - Started > 60)
@@ -36,7 +40,7 @@ namespace SoulsCombatMapTests
 			}
 			UWorld* World = AutomationCommon::GetAnyGameWorld();
 			if (!World || !World->HasBegunPlay()) { return false; }
-			if (Attacks == 0)
+			if (!bInitialized)
 			{
 				auto* P = Cast<ASoulsNewCharacter>(UGameplayStatics::GetPlayerCharacter(World, 0));
 				if (!P || !P->HasActorBegunPlay()) { return false; }
@@ -50,17 +54,39 @@ namespace SoulsCombatMapTests
 				Test->TestNotNull(TEXT("Real controller"), P->GetController());
 				P->SetActorLocation(B->GetActorLocation() - FVector(175, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
 				P->SetActorRotation(FRotator::ZeroRotator);
+				bInitialized = true;
+				DamageHandle = B->GetSoulsHealth()->DamageReceived().AddLambda([this](USoulsHealthComponent*, const FSoulsDamageContext& Context, float Applied, float)
+				{
+					++DamageEvents;
+					Test->TestTrue(TEXT("Real montage notify damage only during Active"), Player.IsValid() && Player->GetSoulsMeleeCombat()->IsAttackWindowOpen());
+					Test->TestEqual(TEXT("Same light damage context"), Context.AttackId, FName(TEXT("Attack.Light")));
+					Test->TestEqual(TEXT("One attack causal ID"), Context.AttackInstanceId, Player->GetSoulsMeleeCombat()->GetActiveAttackId());
+					Test->TestEqual(TEXT("Actual loss including final overkill"), Applied, FMath::Min(100.0f, 625.0f - 100.0f * (Attacks - 1)));
+				});
 			}
 			if (!Player.IsValid() || !Boss.IsValid()) { Test->AddError(TEXT("Map actors disappeared.")); return true; }
 			if (World->GetTimeSeconds() < NextTime) { return false; }
 			auto* Combat = Player->GetSoulsMeleeCombat();
-			if (!Test->TestTrue(TEXT("Attack through the same component API as input"), Combat->TryLightAttack())) { return true; }
-			++Attacks;
+			if (!bAttackInProgress)
+			{
+				if (!Test->TestTrue(TEXT("Attack through the same component API as input"), Combat->TryLightAttack())) { return true; }
+				Test->TestTrue(TEXT("Starts Windup"), Combat->GetCombatState() == ESoulsMeleeState::Windup);
+				Test->TestEqual(TEXT("No damage at button/API time"), Boss->GetSoulsHealth()->GetCurrentHealth(), FMath::Max(0.0f, 625.0f - 100.0f * Attacks));
+				Test->TestFalse(TEXT("Immediate input spam gated"), Combat->TryLightAttack());
+				++Attacks; bAttackInProgress = true; return false;
+			}
+			if (Combat->GetCombatState() == ESoulsMeleeState::Windup)
+			{
+				Test->TestEqual(TEXT("No damage before real notify window"), Boss->GetSoulsHealth()->GetCurrentHealth(), FMath::Max(0.0f, 625.0f - 100.0f * (Attacks-1)));
+				return false;
+			}
+			if (Combat->GetCombatState() != ESoulsMeleeState::Idle) { return false; }
+			bAttackInProgress = false;
 			const float Expected = FMath::Max(0.0f, 625.0f - 100.0f * Attacks);
 			Test->TestEqual(TEXT("Actual sweep damage at each step"), Boss->GetSoulsHealth()->GetCurrentHealth(), Expected);
-			Test->TestFalse(TEXT("Immediate input spam gated"), Combat->TryLightAttack());
+			Test->TestEqual(TEXT("One confirmed damage event per complete animated attack"), DamageEvents, Attacks);
 			if (!bKill) { return true; }
-			if (Attacks < 7) { NextTime = World->GetTimeSeconds() + Combat->GetLightAttackCooldown() + 0.001; return false; }
+			if (Attacks < 7) { NextTime = World->GetTimeSeconds(); return false; }
 			auto* Reward = Boss->GetRewards()->GetReward();
 			auto* Pickup = Boss->GetDropSpawner()->GetActivePickup();
 			Test->TestTrue(TEXT("Death committed"), Boss->GetSoulsHealth()->IsDead());
@@ -80,6 +106,10 @@ namespace SoulsCombatMapTests
 		double Started = FPlatformTime::Seconds();
 		double NextTime = 0;
 		int32 Attacks = 0;
+		int32 DamageEvents = 0;
+		bool bInitialized = false;
+		bool bAttackInProgress = false;
+		FDelegateHandle DamageHandle;
 		TWeakObjectPtr<ASoulsNewCharacter> Player;
 		TWeakObjectPtr<ASoulsPrototypeBoss> Boss;
 	};
@@ -103,6 +133,7 @@ namespace SoulsCombatMapTests
 				ASoulsPrototypeBoss* B = nullptr; for (TActorIterator<ASoulsPrototypeBoss> It(World); It; ++It) { B = *It; break; }
 				if (!Test->TestNotNull(TEXT("Authored boss"), B)) { return true; }
 				Controller = PC; Boss = B;
+				Player = P;
 				const auto* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer());
 				if (!Test->TestNotNull(TEXT("Real Enhanced Input subsystem"), Subsystem)) { return true; }
 				P->SetActorLocation(B->GetActorLocation() - FVector(175, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
@@ -113,9 +144,16 @@ namespace SoulsCombatMapTests
 			{
 				const FInputKeyEventArgs Key = FInputKeyEventArgs::CreateSimulated(EKeys::LeftMouseButton, IE_Pressed, 1.0f);
 				Controller->InputKey(Key);
+				Test->TestEqual(TEXT("Key receipt itself has no immediate damage"), Boss->GetSoulsHealth()->GetCurrentHealth(), 625.0f);
 				Stage = 2; return false;
 			}
+			if (Player->GetSoulsMeleeCombat()->GetCombatState() == ESoulsMeleeState::Windup)
+			{
+				bSawWindup = true;
+				Test->TestEqual(TEXT("Input Windup is harmless"), Boss->GetSoulsHealth()->GetCurrentHealth(), 625.0f);
+			}
 			if (Boss->GetSoulsHealth()->GetCurrentHealth() == 625.0f) { return false; }
+			Test->TestTrue(TEXT("Observed input-driven Windup before damage"), bSawWindup);
 			Test->TestEqual(TEXT("Raw LeftMouseButton -> mapping -> Started -> component -> sweep"), Boss->GetSoulsHealth()->GetCurrentHealth(), 525.0f);
 			Release(); return true;
 		}
@@ -132,6 +170,8 @@ namespace SoulsCombatMapTests
 		double Started = FPlatformTime::Seconds();
 		int32 Stage = 0;
 		TWeakObjectPtr<APlayerController> Controller;
+		TWeakObjectPtr<ASoulsNewCharacter> Player;
+		bool bSawWindup = false;
 		TWeakObjectPtr<ASoulsPrototypeBoss> Boss;
 	};
 }

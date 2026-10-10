@@ -4,6 +4,7 @@
 #include "Attributes/SoulsHealthComponent.h"
 #include "Items/SoulsItemComponent.h"
 #include "Combat/SoulsMeleeCombatComponent.h"
+#include "Animation/AnimMontage.h"
 #include "InputAction.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Engine/LocalPlayer.h"
@@ -24,6 +25,8 @@ ASoulsNewCharacter::ASoulsNewCharacter()
 	SoulsMeleeCombat = CreateDefaultSubobject<USoulsMeleeCombatComponent>(TEXT("SoulsMeleeCombat"));
 	static ConstructorHelpers::FObjectFinder<UInputAction> AttackInput(TEXT("/Game/SoulsNew/Input/IA_LightAttack.IA_LightAttack"));
 	LightAttackAction = AttackInput.Object;
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontage(TEXT("/Game/SoulsNew/Animations/AM_Souls_LightAttack.AM_Souls_LightAttack"));
+	DefaultLightAttackMontage = AttackMontage.Object;
 	// Health's existing default is 100; inherited Blueprint defaults have no override for these new subobjects.
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
@@ -63,6 +66,8 @@ ASoulsNewCharacter::ASoulsNewCharacter()
 
 void ASoulsNewCharacter::BeginPlay()
 {
+	// Runtime mutation belongs on the game thread, never in the async-loading constructor.
+	if (!SoulsMeleeCombat->GetLightAttackMontage()) { SoulsMeleeCombat->SetLightAttackMontage(DefaultLightAttackMontage); }
 	Super::BeginPlay();
 #if !UE_BUILD_SHIPPING
 	UE_LOG(LogSoulsNew, Display, TEXT("[SoulsPrototype] Player initialized: %s Health=%g/%g Base=%g Grants=%d"),
