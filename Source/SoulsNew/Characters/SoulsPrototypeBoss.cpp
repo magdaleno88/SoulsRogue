@@ -26,17 +26,22 @@ ASoulsPrototypeBoss::ASoulsPrototypeBoss()
 	VisualMesh->SetRelativeScale3D(FVector(1, 1, 2));
 	VisualMeshAsset = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Engine/BasicShapes/Cube.Cube")));
 	Health = CreateDefaultSubobject<USoulsHealthComponent>(TEXT("SoulsHealth"));
-	Health->SetBaseMaxHealth(500.0f);
 	Items = CreateDefaultSubobject<USoulsItemComponent>(TEXT("SoulsItems"));
 	Rewards = CreateDefaultSubobject<USoulsRewardComponent>(TEXT("SoulsRewards"));
 	DropSpawner = CreateDefaultSubobject<USoulsRewardDropSpawnerComponent>(TEXT("SoulsDropSpawner"));
-	// Default cube/capsule half-height is 100: pickup center is 45 above the floor and beside the body.
-	DropSpawner->SetSpawnOffset(FVector(160, 0, -55));
 }
 
 void ASoulsPrototypeBoss::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
+	// Placed actors can be constructed on the async loading thread in a cooked game.
+	// Configure spawned/editor instances here; BeginPlay also configures loaded actors
+	// on the game thread before granting their item or marking the prototype ready.
+	if (!HasActorBegunPlay())
+	{
+		Health->SetBaseMaxHealth(500.0f);
+		DropSpawner->SetSpawnOffset(FVector(160, 0, -55));
+	}
 	if (!VisualMesh->GetStaticMesh() && !VisualMeshAsset.IsNull())
 	{
 		if (UStaticMesh* Mesh = VisualMeshAsset.LoadSynchronous()) { VisualMesh->SetStaticMesh(Mesh); }
@@ -48,7 +53,9 @@ void ASoulsPrototypeBoss::BeginPlay()
 {
 	Super::BeginPlay();
 	// Explicitly complete composition before configuring damage/reward flow; component BeginPlay order is irrelevant.
-	if (!DropSpawner->RefreshRewardBinding() || !Health->SetBaseMaxHealth(500.0f))
+	// Default cube/capsule half-height is 100: pickup center is 45 above the floor and beside the body.
+	if (!DropSpawner->SetSpawnOffset(FVector(160, 0, -55))
+		|| !DropSpawner->RefreshRewardBinding() || !Health->SetBaseMaxHealth(500.0f))
 	{
 		UE_LOG(LogSoulsNew, Error, TEXT("[SoulsPrototype] %s: invalid prototype component setup."), *GetName());
 		return;
