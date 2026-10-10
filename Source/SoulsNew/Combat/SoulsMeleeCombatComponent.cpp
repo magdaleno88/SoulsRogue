@@ -87,6 +87,7 @@ bool USoulsMeleeCombatComponent::TryLightAttack()
 	AttackMontageInstanceId = Instance->GetInstanceID();
 	Instance->OnMontageBlendingOutStarted.BindUObject(this, &USoulsMeleeCombatComponent::OnMontageBlendingOut, ThisAttack);
 	Instance->OnMontageEnded.BindUObject(this, &USoulsMeleeCombatComponent::OnMontageEnded, ThisAttack);
+	CaptureWindowEligibility(); // One bounded, non-damaging sample for conservative skipped-window recovery.
 	NextLightAttackTime = static_cast<double>(World->GetTimeSeconds()) + LightAttackCooldown;
 #if !UE_BUILD_SHIPPING
 	UE_LOG(LogSoulsNew, Verbose, TEXT("[SoulsCombat] LightAttack Windup: %s Instance=%d"), *Owner->GetName(), AttackMontageInstanceId);
@@ -141,16 +142,30 @@ bool USoulsMeleeCombatComponent::BeginAttackWindow(USkeletalMeshComponent* Mesh,
 {
 	check(IsInGameThread());
 	if (!MatchesExecution(Mesh, Animation, InstanceId) || CombatState != ESoulsMeleeState::Windup || bWindowOpened) { return false; }
+	const FAnimMontageInstance* Instance = ActiveAnimInstance->GetMontageInstanceForID(InstanceId);
+	if (!Instance || Instance->IsStopped() || Instance->GetPlayRate() <= 0.0f) { return false; }
 	bWindowOpened = true;
+	bWindowEvaluated = false;
+	WindowBeginMontagePosition = Instance->GetPosition();
 	HitActors.Reset();
 	CombatState = ESoulsMeleeState::Active;
 	return true;
 }
 
-bool USoulsMeleeCombatComponent::EndAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId)
+bool USoulsMeleeCombatComponent::EndAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId, bool bReachedEnd)
 {
 	check(IsInGameThread());
 	if (!MatchesExecution(Mesh, Animation, InstanceId) || CombatState != ESoulsMeleeState::Active) { return false; }
+	const FGuid ThisAttack = ActiveAttackId;
+	const FAnimMontageInstance* Instance = ActiveAnimInstance->GetMontageInstanceForID(InstanceId);
+	// Native Begin/End are precise substeps, but Tick runs only after the entire Advance.
+	// Recover only a forward traversal that began before Begin and reached natural End without a Tick.
+	if (bReachedEnd && !bWindowEvaluated && Instance && !Instance->IsStopped() && Instance->GetPlayRate() > 0.0f
+		&& Instance->GetPreviousPosition() < WindowBeginMontagePosition && Instance->GetPosition() > WindowBeginMontagePosition)
+	{
+		EvaluateAttackWindow(Mesh, Animation, InstanceId, true);
+	}
+	if (ActiveAttackId != ThisAttack || CombatState != ESoulsMeleeState::Active) { return false; }
 	CombatState = ESoulsMeleeState::Recovery;
 	return true;
 }
@@ -172,6 +187,9 @@ void USoulsMeleeCombatComponent::FinishCurrentAttack(const FGuid& ExpectedAttack
 	}
 	CombatState = ESoulsMeleeState::Idle;
 	bWindowOpened = false;
+	bWindowEvaluated = false;
+	WindowBeginMontagePosition = 0.0f;
+	ClearWindowEligibility();
 	bChangedRootMotionMode = false;
 	ActiveAttackId.Invalidate();
 	AttackMontageInstanceId = INDEX_NONE;
@@ -211,6 +229,84 @@ void USoulsMeleeCombatComponent::OnMontageEnded(UAnimMontage* Montage, bool, FGu
 
 bool USoulsMeleeCombatComponent::ProcessAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId)
 {
+	return EvaluateAttackWindow(Mesh, Animation, InstanceId, false);
+}
+
+void USoulsMeleeCombatComponent::GatherAttackHits(TArray<FHitResult>& Hits) const
+{
+	const AActor* Owner = GetOwner();
+	const FVector Forward = Owner->GetActorForwardVector();
+	const FVector Start = Owner->GetActorLocation() + Forward * (TraceRadius + 1.0f);
+	const FVector End = Owner->GetActorLocation() + Forward * LightAttackRange;
+	FCollisionObjectQueryParams Objects;
+	Objects.AddObjectTypesToQuery(ECC_Pawn);
+	Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
+	Objects.AddObjectTypesToQuery(ECC_WorldStatic);
+	FCollisionQueryParams Query(SCENE_QUERY_STAT(SoulsLightAttack), false, Owner);
+	GetWorld()->SweepMultiByObjectType(Hits, Start, End, FQuat::Identity, Objects, FCollisionShape::MakeSphere(TraceRadius), Query);
+	// Stable target order and component choice, independent of physics broadphase order.
+	Hits.Sort([](const FHitResult& Left, const FHitResult& Right)
+	{
+		const FString LeftActor = GetPathNameSafe(Left.GetActor());
+		const FString RightActor = GetPathNameSafe(Right.GetActor());
+		if (LeftActor != RightActor) { return LeftActor.Compare(RightActor, ESearchCase::CaseSensitive) < 0; }
+		return GetPathNameSafe(Left.GetComponent()).Compare(GetPathNameSafe(Right.GetComponent()), ESearchCase::CaseSensitive) < 0;
+	});
+}
+
+void USoulsMeleeCombatComponent::CaptureWindowEligibility()
+{
+	ClearWindowEligibility();
+	SampledOwnerTransform = GetOwner()->GetActorTransform();
+	SampledOwnerRoot = GetOwner()->GetRootComponent();
+	if (SampledOwnerRoot.IsValid())
+	{
+		OwnerTransformHandle = SampledOwnerRoot->TransformUpdated.AddWeakLambda(this,
+			[this](USceneComponent*, EUpdateTransformFlags, ETeleportType)
+			{
+				bOwnerMoved |= !GetOwner()->GetActorTransform().Equals(SampledOwnerTransform);
+			});
+	}
+	TArray<FHitResult> Hits;
+	GatherAttackHits(Hits);
+	for (const FHitResult& Hit : Hits)
+	{
+		AActor* Target = Hit.GetActor();
+		UPrimitiveComponent* Body = Hit.GetComponent();
+		if (!IsValid(Target) || !IsValid(Body) || InitialWindowCandidates.Contains(Body)) { continue; }
+		bool bAmbiguous = false;
+		USoulsHealthComponent* Health = UniqueHealth(Target, bAmbiguous);
+		if (!Health || bAmbiguous || Health->IsDead()) { continue; }
+		InitialWindowCandidates.Add(Body, {Body->GetComponentTransform(), Body->Bounds.BoxExtent, Health});
+		const TWeakObjectPtr<UPrimitiveComponent> Key = Body;
+		InitialWindowCandidates[Key].TransformHandle = Body->TransformUpdated.AddWeakLambda(this,
+			[this, Key](USceneComponent*, EUpdateTransformFlags, ETeleportType)
+			{
+				if (FSoulsWindowSpatialSample* Sample = InitialWindowCandidates.Find(Key); Sample && Key.IsValid())
+				{
+					Sample->bMoved |= !Key->GetComponentTransform().Equals(Sample->Transform)
+						|| !Key->Bounds.BoxExtent.Equals(Sample->BoundsExtent);
+				}
+			});
+	}
+}
+
+void USoulsMeleeCombatComponent::ClearWindowEligibility()
+{
+	if (SampledOwnerRoot.IsValid()) { SampledOwnerRoot->TransformUpdated.Remove(OwnerTransformHandle); }
+	for (const auto& Entry : InitialWindowCandidates)
+	{
+		if (Entry.Key.IsValid()) { Entry.Key->TransformUpdated.Remove(Entry.Value.TransformHandle); }
+	}
+	InitialWindowCandidates.Reset();
+	SampledOwnerRoot.Reset();
+	OwnerTransformHandle.Reset();
+	SampledOwnerTransform = FTransform::Identity;
+	bOwnerMoved = false;
+}
+
+bool USoulsMeleeCombatComponent::EvaluateAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId, bool bConservativeCatchUp)
+{
 	check(IsInGameThread());
 	if (bProcessingWindow || !MatchesExecution(Mesh, Animation, InstanceId) || CombatState != ESoulsMeleeState::Active) { return false; }
 	AActor* Owner = GetOwner();
@@ -222,26 +318,12 @@ bool USoulsMeleeCombatComponent::ProcessAttackWindow(USkeletalMeshComponent* Mes
 		CancelCurrentAttack(); return false;
 	}
 	TGuardValue<bool> ProcessingGuard(bProcessingWindow, true);
+	bWindowEvaluated = true; // Even a miss is a real window evaluation, not a reason to replay at End.
+	if (bConservativeCatchUp && (bOwnerMoved || Owner->GetRootComponent() != SampledOwnerRoot.Get()
+		|| !Owner->GetActorTransform().Equals(SampledOwnerTransform))) { return false; }
 	const FGuid ThisAttack = ActiveAttackId;
-	const FVector Forward = Owner->GetActorForwardVector();
-	const FVector Start = Owner->GetActorLocation() + Forward * (TraceRadius + 1.0f);
-	const FVector End = Owner->GetActorLocation() + Forward * LightAttackRange;
-	FCollisionObjectQueryParams Objects;
-	Objects.AddObjectTypesToQuery(ECC_Pawn);
-	Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
-	Objects.AddObjectTypesToQuery(ECC_WorldStatic);
-	FCollisionQueryParams Query(SCENE_QUERY_STAT(SoulsLightAttack), false, Owner);
 	TArray<FHitResult> Hits;
-	World->SweepMultiByObjectType(Hits, Start, End, FQuat::Identity, Objects,
-		FCollisionShape::MakeSphere(TraceRadius), Query);
-	// Stable target order and component choice, independent of physics broadphase order.
-	Hits.Sort([](const FHitResult& Left, const FHitResult& Right)
-	{
-		const FString LeftActor = GetPathNameSafe(Left.GetActor());
-		const FString RightActor = GetPathNameSafe(Right.GetActor());
-		if (LeftActor != RightActor) { return LeftActor.Compare(RightActor, ESearchCase::CaseSensitive) < 0; }
-		return GetPathNameSafe(Left.GetComponent()).Compare(GetPathNameSafe(Right.GetComponent()), ESearchCase::CaseSensitive) < 0;
-	});
+	GatherAttackHits(Hits);
 	FSoulsDamageContext Context;
 	Context.DamageAmount = LightAttackDamage;
 	Context.SourceActor = Owner;
@@ -251,6 +333,9 @@ bool USoulsMeleeCombatComponent::ProcessAttackWindow(USkeletalMeshComponent* Mes
 #if !UE_BUILD_SHIPPING
 	if (bDrawDebugSweep)
 	{
+		const FVector Forward = Owner->GetActorForwardVector();
+		const FVector Start = Owner->GetActorLocation() + Forward * (TraceRadius + 1.0f);
+		const FVector End = Owner->GetActorLocation() + Forward * LightAttackRange;
 		DrawDebugLine(World, Start, End, FColor::Cyan, false, 0.55f);
 		DrawDebugSphere(World, Start, TraceRadius, 12, FColor::Cyan, false, 0.55f);
 		DrawDebugSphere(World, End, TraceRadius, 12, FColor::Cyan, false, 0.55f);
@@ -265,6 +350,14 @@ bool USoulsMeleeCombatComponent::ProcessAttackWindow(USkeletalMeshComponent* Mes
 		if (!IsValid(Target) || Target == Owner || HitActors.Contains(Target)) { continue; }
 		USoulsHealthComponent* Health = UniqueHealth(Target, bAmbiguous);
 		if (!Health || bAmbiguous) { continue; }
+		if (bConservativeCatchUp)
+		{
+			UPrimitiveComponent* Body = Hit.GetComponent();
+			const FSoulsWindowSpatialSample* Sample = InitialWindowCandidates.Find(Body);
+			if (!IsValid(Body) || !Sample || Sample->bMoved || Sample->Health != Health
+				|| !Body->GetComponentTransform().Equals(Sample->Transform)
+				|| !Body->Bounds.BoxExtent.Equals(Sample->BoundsExtent)) { continue; }
+		}
 		HitActors.Add(Target); // Reserve before synchronous observers can trigger another sweep.
 		Context.HitLocation = Hit.ImpactPoint;
 		Context.HitNormal = Hit.ImpactNormal;

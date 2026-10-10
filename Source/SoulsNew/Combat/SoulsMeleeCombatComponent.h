@@ -9,6 +9,9 @@ class UAnimInstance;
 class UAnimSequenceBase;
 class USkeletalMeshComponent;
 class USoulsHealthComponent;
+class UPrimitiveComponent;
+class USceneComponent;
+struct FHitResult;
 
 UENUM(BlueprintType)
 enum class ESoulsMeleeState : uint8
@@ -49,7 +52,8 @@ public:
 	/** Notify requests carry the exact mesh, asset and montage execution ID; stale requests are rejected. */
 	bool BeginAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId);
 	bool ProcessAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId);
-	bool EndAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId);
+	/** Natural native End can recover one missed evaluation; interruption never does. */
+	bool EndAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId, bool bReachedEnd = false);
 
 	float GetLightAttackDamage() const { return LightAttackDamage; }
 	float GetLightAttackRange() const { return LightAttackRange; }
@@ -92,6 +96,8 @@ private:
 	bool bStartingAttack = false;
 	bool bProcessingWindow = false;
 	bool bWindowOpened = false;
+	bool bWindowEvaluated = false;
+	float WindowBeginMontagePosition = 0.0f;
 	bool bChangedRootMotionMode = false;
 	uint8 PreviousRootMotionMode = 0;
 	int32 AttackMontageInstanceId = INDEX_NONE;
@@ -101,8 +107,26 @@ private:
 	TWeakObjectPtr<USoulsHealthComponent> ObservedHealth;
 	FDelegateHandle DeathHandle;
 	TSet<TWeakObjectPtr<AActor>> HitActors;
+	// Eligibility samples only, never hits: no spatial history is fabricated for a skipped window.
+	struct FSoulsWindowSpatialSample
+	{
+		FTransform Transform;
+		FVector BoundsExtent;
+		TWeakObjectPtr<USoulsHealthComponent> Health;
+		bool bMoved = false;
+		FDelegateHandle TransformHandle;
+	};
+	FTransform SampledOwnerTransform = FTransform::Identity;
+	TWeakObjectPtr<USceneComponent> SampledOwnerRoot;
+	FDelegateHandle OwnerTransformHandle;
+	bool bOwnerMoved = false;
+	TMap<TWeakObjectPtr<UPrimitiveComponent>, FSoulsWindowSpatialSample> InitialWindowCandidates;
 
 	bool MatchesExecution(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId) const;
+	void GatherAttackHits(TArray<FHitResult>& Hits) const;
+	void CaptureWindowEligibility();
+	void ClearWindowEligibility();
+	bool EvaluateAttackWindow(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, int32 InstanceId, bool bConservativeCatchUp);
 	void FinishCurrentAttack(const FGuid& ExpectedAttackId);
 	void OnMontageBlendingOut(UAnimMontage* Montage, bool bInterrupted, FGuid ExpectedAttackId);
 	void OnMontageEnded(UAnimMontage* Montage, bool bInterrupted, FGuid ExpectedAttackId);

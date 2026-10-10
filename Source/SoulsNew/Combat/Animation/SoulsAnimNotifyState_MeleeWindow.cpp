@@ -2,6 +2,7 @@
 
 #include "Animation/ActiveMontageInstanceScope.h"
 #include "Animation/AnimNotifies/AnimNotify.h"
+#include "Animation/AnimNotifyLibrary.h"
 #include "Combat/SoulsMeleeCombatComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/Actor.h"
@@ -45,7 +46,7 @@ void USoulsAnimNotifyState_MeleeWindow::NotifyTick(USkeletalMeshComponent* Mesh,
 }
 void USoulsAnimNotifyState_MeleeWindow::NotifyEnd(USkeletalMeshComponent* Mesh, UAnimSequenceBase* Animation, const FAnimNotifyEventReference& Reference)
 {
-	if (auto* C = Combat(Mesh)) { C->EndAttackWindow(Mesh, Animation, ExecutionId(Reference)); }
+	if (auto* C = Combat(Mesh)) { C->EndAttackWindow(Mesh, Animation, ExecutionId(Reference), UAnimNotifyLibrary::NotifyStateReachedEnd(Reference)); }
 }
 
 void USoulsAnimNotifyState_MeleeWindow::BranchingPointNotifyBegin(FBranchingPointNotifyPayload& Payload)
@@ -58,5 +59,5 @@ void USoulsAnimNotifyState_MeleeWindow::BranchingPointNotifyTick(FBranchingPoint
 }
 void USoulsAnimNotifyState_MeleeWindow::BranchingPointNotifyEnd(FBranchingPointNotifyPayload& Payload)
 {
-	if (auto* C = Combat(Payload.SkelMeshComponent)) { C->EndAttackWindow(Payload.SkelMeshComponent, Payload.SequenceAsset, Payload.MontageInstanceID); }
+	if (auto* C = Combat(Payload.SkelMeshComponent)) { C->EndAttackWindow(Payload.SkelMeshComponent, Payload.SequenceAsset, Payload.MontageInstanceID, Payload.bReachedEnd); }
 }
